@@ -1,14 +1,106 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+use default_db::DefaultDB;
+use std::collections::{HashMap, VecDeque};
+use std::io::Error;
+use tokio::sync::mpsc::{channel, Sender}; //高性能无锁队列 Sender (可以写入信道) Receiver (读取信道)
+use tokio::sync::oneshot;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "tests/store_tests.rs"]
+pub mod store_tests;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+pub mod default_db;
+
+// pub type StoreError = rocksdb::Error;
+pub type StoreResult<T> = Result<T, Error>;
+
+type Key = Vec<u8>;
+type Value = Vec<u8>;
+
+//命令类型
+pub enum StoreCommand {
+    Write(Key, Value),
+    Read(Key, oneshot::Sender<StoreResult<Option<Value>>>),
+    NotifyRead(Key, oneshot::Sender<StoreResult<Value>>),
+}
+
+#[derive(Clone)]
+pub struct Store {
+    channel: Sender<StoreCommand>,
+}
+
+pub trait BaseDB<K, V> {
+    fn put(&mut self, k: &K, v: &V) -> Result<(), Error>;
+    fn get(&self, k: &K) -> Result<Option<V>, Error>;
+}
+
+impl Store {
+    pub fn new_default() -> StoreResult<Self> {
+        let mut db = DefaultDB::<Key, Value>::new();
+        let mut obligations = HashMap::<_, VecDeque<oneshot::Sender<_>>>::new();
+        let (tx, mut rx) = channel(100);
+        tokio::spawn(async move {
+            //启动一个异步线程
+            while let Some(command) = rx.recv().await {
+                match command {
+                    StoreCommand::Write(key, value) => {
+                        let _ = db.put(&key, &value);
+                        //维护请求读队列
+                        if let Some(mut senders) = obligations.remove(&key) {
+                            while let Some(s) = senders.pop_front() {
+                                let _ = s.send(Ok(value.clone()));
+                            }
+                        }
+                    }
+                    StoreCommand::Read(key, sender) => {
+                        let response = db.get(&key);
+                        let _ = sender.send(response);
+                    }
+                    StoreCommand::NotifyRead(key, sender) => {
+                        let response = db.get(&key);
+                        match response {
+                            Ok(None) => obligations
+                                .entry(key)
+                                .or_insert_with(VecDeque::new)
+                                .push_back(sender),
+                            //如果没有则放入等待队列中
+                            _ => {
+                                let _ = sender.send(response.map(|x| x.unwrap()));
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        Ok(Self { channel: tx })
+    }
+
+    pub async fn write(&mut self, key: Key, value: Value) {
+        if let Err(e) = self.channel.send(StoreCommand::Write(key, value)).await {
+            panic!("Failed to send Write command to store: {}", e);
+        }
+    }
+
+    pub async fn read(&mut self, key: Key) -> StoreResult<Option<Value>> {
+        let (sender, receiver) = oneshot::channel();
+        if let Err(e) = self.channel.send(StoreCommand::Read(key, sender)).await {
+            panic!("Failed to send Read command to store: {}", e);
+        }
+        receiver
+            .await
+            .expect("Failed to receive reply to Read command from store")
+    }
+
+    pub async fn notify_read(&mut self, key: Key) -> StoreResult<Value> {
+        let (sender, receiver) = oneshot::channel();
+        if let Err(e) = self
+            .channel
+            .send(StoreCommand::NotifyRead(key, sender))
+            .await
+        {
+            panic!("Failed to send NotifyRead command to store: {}", e);
+        }
+        receiver
+            .await
+            .expect("Failed to receive reply to NotifyRead command from store")
     }
 }
