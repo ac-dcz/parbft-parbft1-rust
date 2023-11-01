@@ -49,8 +49,8 @@ impl Default for Parameters {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Authority {
     pub name: PublicKey,
-    pub id: usize,    // id of the node in the tss public key share set
-    pub stake: Stake, //投票占比（默认为1）
+    pub id: usize, // id of the node in the tss public key share set
+    pub stake: Stake,
     pub address: SocketAddr,
 }
 
@@ -95,7 +95,7 @@ impl Committee {
         // If N = 3f + 1 + k (0 <= k < 3)
         // then (2 N + 3) / 3 = 2f + 1 + (2k + 2)/3 = 2f + 1 + k = N - f
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        2 * ((total_votes - 1) / 3) + 1 //2f+1
+        2 * ((total_votes - 1) / 3) + 1
     }
 
     // This threshold is used only to sychronize the nodes in a hacky way during the geo-distributed experiments, where different machines can start at different times, but the consensus protocol need most of the nodes to start at roughly the same time to have good performance.
@@ -109,7 +109,7 @@ impl Committee {
 
     pub fn random_coin_threshold(&self) -> Stake {
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        (total_votes - 1) / 3 + 1 //f+1
+        (total_votes - 1) / 3 + 1
     }
 
     pub fn address(&self, name: &PublicKey) -> ConsensusResult<SocketAddr> {

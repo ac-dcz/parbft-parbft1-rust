@@ -17,16 +17,18 @@ pub mod messages_tests;
 // daniel: Add view, height, fallback in Block, Vote and QC
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
-    pub qc: QC,            //前一个节点的highQC
-    pub author: PublicKey, //谁发的
+    pub qc: QC, //前一个节点的highQC
+    pub coin: Option<RandomCoin>,
+    pub author: PublicKey,
     pub round: SeqNumber,
     pub payload: Vec<Digest>,
-    pub signature: Signature, //公私钥对签名
+    pub signature: Signature,
 }
 
 impl Block {
     pub async fn new(
         qc: QC,
+        coin: Option<RandomCoin>,
         author: PublicKey,
         round: SeqNumber,
         payload: Vec<Digest>,
@@ -34,11 +36,13 @@ impl Block {
     ) -> Self {
         let block = Self {
             qc,
+            coin,
             author,
             round,
             payload,
             signature: Signature::default(),
         };
+
         let signature = signature_service.request_signature(block.digest()).await;
         Self { signature, ..block }
     }
@@ -51,7 +55,6 @@ impl Block {
         &self.qc.hash
     }
 
-    //验证一个区块的合法性
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
         // Ensure the authority has voting rights.
         let voting_rights = committee.stake(&self.author);
@@ -59,6 +62,12 @@ impl Block {
             voting_rights > 0,
             ConsensusError::UnknownAuthority(self.author)
         );
+
+        // ensure!(
+        //     (self.fallback == 0 && self.height == 0)
+        //         || (self.fallback == 1 && (self.height == 1 || self.height == 2)),
+        //     ConsensusError::InvalidHeight(self.height)
+        // );
 
         // Check the signature.
         self.signature.verify(&self.digest(), &self.author)?;
@@ -68,6 +77,48 @@ impl Block {
             self.qc.verify(committee)?;
         }
 
+        // Check the TC embedded in the block (if any).
+        // if let Some(ref tc) = self.tc {
+        //     tc.verify(committee)?;
+        // }
+        Ok(())
+    }
+
+    pub fn verify_fallback(
+        &self,
+        committee: &Committee,
+        pk_set: &PublicKeySet,
+    ) -> ConsensusResult<()> {
+        // Ensure the authority has voting rights.
+        let voting_rights = committee.stake(&self.author);
+        ensure!(
+            voting_rights > 0,
+            ConsensusError::UnknownAuthority(self.author)
+        );
+
+        // ensure!(
+        //     (self.fallback == 0 && self.height == 0)
+        //         || (self.fallback == 1 && (self.height == 1 || self.height == 2)),
+        //     ConsensusError::InvalidHeight(self.height)
+        // );
+
+        // Check the signature.
+        self.signature.verify(&self.digest(), &self.author)?;
+
+        // Check the embedded QC.
+        if self.qc != QC::genesis() {
+            self.qc.verify(committee)?;
+        }
+
+        // // Check the TC embedded in the block (if any).
+        // if let Some(ref tc) = self.tc {
+        //     tc.verify(committee)?;
+        // }
+
+        // Check the coin embedded in the block (if any).
+        if let Some(ref coin) = self.coin {
+            coin.verify(committee, pk_set)?;
+        }
         Ok(())
     }
 }
@@ -89,7 +140,7 @@ impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B(author {}, round {},  qc {:?}, payload_len {})",
+            "{}: B(author {} , round {}, qc {:?}, payload_len {})",
             self.digest(),
             self.author,
             self.round,
@@ -138,6 +189,12 @@ impl Vote {
             ConsensusError::UnknownAuthority(self.author)
         );
 
+        // ensure!(
+        //     (self.fallback == 0 && self.height == 0)
+        //         || (self.fallback == 1 && (self.height == 1 || self.height == 2)),
+        //     ConsensusError::InvalidHeight(self.height)
+        // );
+
         // Check the signature.
         self.signature.verify(&self.digest(), &self.author)?;
         Ok(())
@@ -184,13 +241,17 @@ impl QC {
         QC::default()
     }
 
+    pub fn timeout(&self) -> bool {
+        self.hash == Digest::default() && self.round != 0
+    }
+
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
         // Ensure the QC has a quorum.
-        let mut weight = 0; //统计投票总数
+        let mut weight = 0;
         let mut used = HashSet::new();
         for (name, _) in self.votes.iter() {
             ensure!(
-                !used.contains(name), //一个节点只能投一次票
+                !used.contains(name),
                 ConsensusError::AuthorityReuseinQC(*name)
             );
             let voting_rights = committee.stake(name);
@@ -199,9 +260,15 @@ impl QC {
             weight += voting_rights;
         }
         ensure!(
-            weight >= committee.quorum_threshold(), //是否达到2f+1的要求
+            weight >= committee.quorum_threshold(),
             ConsensusError::QCRequiresQuorum
         );
+
+        // ensure!(
+        //     (self.fallback == 0 && self.height == 0)
+        //         || (self.fallback == 1 && (self.height == 1 || self.height == 2)),
+        //     ConsensusError::InvalidHeight(self.height)
+        // );
 
         // Check the signatures.
         Signature::verify_batch(&self.digest(), &self.votes).map_err(ConsensusError::from)
@@ -222,7 +289,7 @@ impl fmt::Debug for QC {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "QC(hash {},  round {},  proposer {})",
+            "QC(hash {}, round {},  proposer {})",
             self.hash, self.round, self.proposer
         )
     }
