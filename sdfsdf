@@ -1,0 +1,53 @@
+[33mcommit e96d3721d6dbffb6aad43fa9fbe21ffe6c7aaac0[m[33m ([m[1;36mHEAD -> [m[1;32mmaster[m[33m)[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Wed Nov 1 15:41:04 2023 +0800
+
+    consensus modify
+
+[33mcommit f4f4fc8d20966f300a802b9cc49821c4228f407f[m[33m ([m[1;31morigin/master[m[33m)[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Tue Oct 31 16:11:22 2023 +0800
+
+    readme
+
+[33mcommit d498812ca8487e63883a7c3e1c7a12d68f244539[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Tue Oct 31 16:10:37 2023 +0800
+
+    message type and config
+
+[33mcommit c1034c4f29bd28916b28db7df1552458d31ef81a[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Tue Oct 31 16:09:47 2023 +0800
+
+    mempool
+
+[33mcommit 46064780de9cee9553b1113877b12bc85c701513[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Tue Oct 31 16:08:09 2023 +0800
+
+    crypto
+
+[33mcommit a36eef23a27874537d70ca87fd40dbacbbf940d2[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Tue Oct 31 14:13:13 2023 +0800
+
+    store
+
+[33mcommit a2732de6d47aec208f7a0a28b08bd6b4d13e8429[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Tue Oct 31 14:12:33 2023 +0800
+
+    network
+
+[33mcommit eecfa8042c1ebe33c0b145d46e94c60b0581ff9a[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Mon Oct 30 19:09:03 2023 +0800
+
+    readme
+
+[33mcommit fa0708848d6b580d51b8fe36e9704d60467ce5a4[m
+Author: dczZ <dcz1192446141@163.com>
+Date:   Mon Oct 30 19:04:26 2023 +0800
+
+    project struct

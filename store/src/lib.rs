@@ -10,7 +10,7 @@ pub mod store_tests;
 
 pub mod default_db;
 
-// pub type StoreError = rocksdb::Error;
+pub type StoreError = Error;
 pub type StoreResult<T> = Result<T, Error>;
 
 type Key = Vec<u8>;

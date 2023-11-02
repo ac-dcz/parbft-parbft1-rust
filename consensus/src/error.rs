@@ -28,6 +28,8 @@ pub enum ConsensusError {
     #[error("Serialization error: {0}")]
     SerializationError(#[from] Box<bincode::ErrorKind>),
 
+    // #[error("Store error: {0}")]
+    // StoreError(#[from] StoreError),
     #[error("Node {0} is not in the committee")]
     NotInCommittee(PublicKey),
 

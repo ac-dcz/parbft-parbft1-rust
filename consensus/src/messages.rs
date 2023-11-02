@@ -18,29 +18,29 @@ pub mod messages_tests;
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
     pub qc: QC, //前一个节点的highQC
-    pub coin: Option<RandomCoin>,
     pub author: PublicKey,
     pub round: SeqNumber,
     pub payload: Vec<Digest>,
     pub signature: Signature,
+    pub path_tag: u8,
 }
 
 impl Block {
     pub async fn new(
         qc: QC,
-        coin: Option<RandomCoin>,
         author: PublicKey,
         round: SeqNumber,
         payload: Vec<Digest>,
         mut signature_service: SignatureService,
+        path_tag: u8,
     ) -> Self {
         let block = Self {
             qc,
-            coin,
             author,
             round,
             payload,
             signature: Signature::default(),
+            path_tag,
         };
 
         let signature = signature_service.request_signature(block.digest()).await;
@@ -81,44 +81,6 @@ impl Block {
         // if let Some(ref tc) = self.tc {
         //     tc.verify(committee)?;
         // }
-        Ok(())
-    }
-
-    pub fn verify_fallback(
-        &self,
-        committee: &Committee,
-        pk_set: &PublicKeySet,
-    ) -> ConsensusResult<()> {
-        // Ensure the authority has voting rights.
-        let voting_rights = committee.stake(&self.author);
-        ensure!(
-            voting_rights > 0,
-            ConsensusError::UnknownAuthority(self.author)
-        );
-
-        // ensure!(
-        //     (self.fallback == 0 && self.height == 0)
-        //         || (self.fallback == 1 && (self.height == 1 || self.height == 2)),
-        //     ConsensusError::InvalidHeight(self.height)
-        // );
-
-        // Check the signature.
-        self.signature.verify(&self.digest(), &self.author)?;
-
-        // Check the embedded QC.
-        if self.qc != QC::genesis() {
-            self.qc.verify(committee)?;
-        }
-
-        // // Check the TC embedded in the block (if any).
-        // if let Some(ref tc) = self.tc {
-        //     tc.verify(committee)?;
-        // }
-
-        // Check the coin embedded in the block (if any).
-        if let Some(ref coin) = self.coin {
-            coin.verify(committee, pk_set)?;
-        }
         Ok(())
     }
 }

@@ -23,6 +23,9 @@ pub mod core_tests;
 
 pub type SeqNumber = u64; // For both round and view
 
+const OPT: u8 = 0;
+const PES: u8 = 1;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {
     Propose(Block),
@@ -33,6 +36,7 @@ pub enum ConsensusMessage {
     LoopBack(Block),
     SyncRequest(Digest, PublicKey),
     SyncReply(Block),
+    SMVBAPropose(Block),
 }
 
 pub struct Core {
@@ -110,7 +114,7 @@ impl Core {
     async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
         // Check if we can vote for this block.
         let safety_rule_1 = block.round > self.last_voted_round;
-        let mut safety_rule_2 = block.qc.round + 1 == block.round;
+        let safety_rule_2 = block.qc.round + 1 == block.round;
 
         // if let Some(ref tc) = block.tc {
         //     let mut can_extend = tc.seq + 1 == block.round;
@@ -178,30 +182,6 @@ impl Core {
         }
     }
 
-    async fn local_timeout_round(&mut self) -> ConsensusResult<()> {
-        warn!("Timeout reached for round {}", self.round);
-        self.increase_last_voted_round(self.round);
-        let timeout = Timeout::new(
-            self.high_qc.clone(),
-            self.round,
-            self.name,
-            self.signature_service.clone(),
-        )
-        .await;
-        debug!("Created {:?}", timeout);
-        self.timer.reset();
-        let message = ConsensusMessage::Timeout(timeout.clone());
-        Synchronizer::transmit(
-            message,
-            &self.name,
-            None,
-            &self.network_filter,
-            &self.committee,
-        )
-        .await?;
-        self.handle_timeout(&timeout).await
-    }
-
     #[async_recursion]
     async fn handle_vote(&mut self, vote: &Vote) -> ConsensusResult<()> {
         debug!("Processing {:?}", vote);
@@ -221,45 +201,7 @@ impl Core {
 
             // Make a new block if we are the next leader.
             if self.name == self.leader_elector.get_leader(self.round) {
-                self.generate_proposal(None).await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn handle_timeout(&mut self, timeout: &Timeout) -> ConsensusResult<()> {
-        debug!("Processing {:?}", timeout);
-        if timeout.seq < self.round {
-            return Ok(());
-        }
-
-        // Ensure the timeout is well formed.
-        timeout.verify(&self.committee)?;
-
-        // Process the QC embedded in the timeout.
-        self.process_qc(&timeout.high_qc).await;
-
-        // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(tc) = self.aggregator.add_timeout(timeout.clone())? {
-            debug!("Assembled {:?}", tc);
-
-            // Try to advance the round.
-            self.advance_round(tc.seq).await;
-
-            // Broadcast the TC.
-            let message = ConsensusMessage::TC(tc.clone());
-            Synchronizer::transmit(
-                message,
-                &self.name,
-                None,
-                &self.network_filter,
-                &self.committee,
-            )
-            .await?;
-
-            // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round) {
-                self.generate_proposal(Some(tc)).await?;
+                self.generate_proposal(OPT).await?;
             }
         }
         Ok(())
@@ -271,7 +213,6 @@ impl Core {
             return;
         }
         // Reset the timer and advance round.
-        self.timer.reset();
         self.round = round + 1;
         debug!("Moved to round {}", self.round);
 
@@ -281,7 +222,7 @@ impl Core {
     // -- End Pacemaker --
 
     #[async_recursion]
-    async fn generate_proposal(&mut self, tc: Option<TC>) -> ConsensusResult<()> {
+    async fn generate_proposal(&mut self, path: u8) -> ConsensusResult<()> {
         // Make a new block.
         let payload = self
             .mempool_driver
@@ -289,15 +230,11 @@ impl Core {
             .await;
         let block = Block::new(
             self.high_qc.clone(),
-            tc,
-            None,
             self.name,
-            self.view,
             self.round,
-            self.height,
-            self.fallback,
             payload,
             self.signature_service.clone(),
+            path,
         )
         .await;
         if !block.payload.is_empty() {
@@ -311,20 +248,23 @@ impl Core {
         }
         debug!("Created {:?}", block);
 
-        // Process our new block and broadcast it.
-        let message = ConsensusMessage::Propose(block.clone());
-        Synchronizer::transmit(
-            message,
-            &self.name,
-            None,
-            &self.network_filter,
-            &self.committee,
-        )
-        .await?;
-        self.process_block(&block).await?;
+        if path == OPT {
+            // Process our new block and broadcast it.
+            let message = ConsensusMessage::Propose(block.clone());
+            Synchronizer::transmit(
+                message,
+                &self.name,
+                None,
+                &self.network_filter,
+                &self.committee,
+            )
+            .await?;
+            self.process_block(&block).await?;
 
-        // Wait for the minimum block delay.
-        sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
+            // Wait for the minimum block delay.
+            sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
+        } else if path == PES {
+        }
         Ok(())
     }
 
@@ -429,11 +369,6 @@ impl Core {
         // Process the QC. This may allow us to advance round.
         self.process_qc(&block.qc).await;
 
-        // Process the TC (if any). This may also allow us to advance round.
-        if let Some(ref tc) = block.tc {
-            self.advance_round(tc.seq).await;
-        }
-
         // Let's see if we have the block's data. If we don't, the mempool
         // will get it and then make us resume processing this block.
         if !self.mempool_driver.verify(block.clone()).await? {
@@ -465,14 +400,6 @@ impl Core {
         Ok(())
     }
 
-    async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
-        self.advance_round(tc.seq).await;
-        if self.name == self.leader_elector.get_leader(self.round) {
-            self.generate_proposal(Some(tc)).await?;
-        }
-        Ok(())
-    }
-
     // daniel: dummy handlers
     async fn handle_signed_qc(&mut self, _: SignedQC) -> ConsensusResult<()> {
         Ok(())
@@ -489,13 +416,14 @@ impl Core {
     pub async fn run(&mut self) {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
-        self.timer.reset();
-        if self.name == self.leader_elector.get_leader(self.round) {
+        if self.opt_path && self.name == self.leader_elector.get_leader(self.round) {
             //如果是leader就发送propose
-            self.generate_proposal(None)
+            self.generate_proposal(OPT)
                 .await
                 .expect("Failed to send the first block");
         }
+        //如果启动了悲观路劲
+        if self.pes_path {}
 
         // This is the main loop: it processes incoming blocks and votes,
         // and receive timeout notifications from our Timeout Manager.
@@ -505,22 +433,19 @@ impl Core {
                     match message {
                         ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
                         ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
-                        ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
-                        ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
                         ConsensusMessage::SignedQC(signed_qc) => self.handle_signed_qc(signed_qc).await,
                         ConsensusMessage::RandomnessShare(rs) => self.handle_rs(rs).await,
                         ConsensusMessage::RandomCoin(rc) => self.handle_rc(rc).await,
                         ConsensusMessage::LoopBack(block) => self.process_block(&block).await,
                         ConsensusMessage::SyncRequest(digest, sender) => self.handle_sync_request(digest, sender).await,
                         ConsensusMessage::SyncReply(block) => self.handle_proposal(&block).await,
+                        _ => break,
                     }
                 },
-                () = &mut self.timer => self.local_timeout_round().await,
                 else => break,
             };
             match result {
                 Ok(()) => (),
-                Err(ConsensusError::StoreError(e)) => error!("{}", e),
                 Err(ConsensusError::SerializationError(e)) => error!("Store corrupted. {}", e),
                 Err(e) => warn!("{}", e),
             }
