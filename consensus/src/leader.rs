@@ -26,7 +26,7 @@ impl RandomLeaderElector {
     }
 
     pub fn add_random_coin(&mut self, random_coin: RandomCoin) {
-        self.random_coins.insert(random_coin.seq, random_coin);
+        self.random_coins.insert(random_coin.round, random_coin);
     }
 
     pub fn get_coin_leader(&self, view: SeqNumber) -> Option<PublicKey> {

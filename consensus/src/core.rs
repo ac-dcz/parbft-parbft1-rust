@@ -1,10 +1,10 @@
 use crate::aggregator::Aggregator;
-use crate::config::{Committee, Parameters};
+use crate::config::{Committee, Parameters, Stake};
 use crate::error::{ConsensusError, ConsensusResult};
 use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Block, RandomCoin, RandomnessShare, SignedQC, Vote, QC};
+use crate::messages::{Block, RandomCoin, RandomnessShare, SPBProof, SPBValue, SPBVote, Vote, QC};
 use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
 use crypto::Hash as _;
@@ -12,11 +12,11 @@ use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use store::Store;
+use threshold_crypto::PublicKeySet;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration};
-
 #[cfg(test)]
 #[path = "tests/core_tests.rs"]
 pub mod core_tests;
@@ -28,15 +28,15 @@ const PES: u8 = 1;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {
-    Propose(Block),
-    Vote(Vote),
-    SignedQC(SignedQC),
+    HsPropose(Block),
+    HSVote(Vote),
     RandomnessShare(RandomnessShare),
     RandomCoin(RandomCoin),
     LoopBack(Block),
     SyncRequest(Digest, PublicKey),
     SyncReply(Block),
-    SMVBAPropose(Block),
+    SPBPropose(SPBValue, SPBProof),
+    SPBVote(SPBVote),
 }
 
 pub struct Core {
@@ -45,6 +45,7 @@ pub struct Core {
     parameters: Parameters,
     store: Store,
     signature_service: SignatureService,
+    pk_set: PublicKeySet,
     leader_elector: LeaderElector,
     mempool_driver: MempoolDriver,
     synchronizer: Synchronizer,
@@ -52,12 +53,21 @@ pub struct Core {
     network_filter: Sender<FilterInput>,
     commit_channel: Sender<Block>,
     round: SeqNumber, // current round
+    epoch: SeqNumber, // current round
     last_voted_round: SeqNumber,
     last_committed_round: SeqNumber,
     high_qc: QC,
     aggregator: Aggregator,
     opt_path: bool,
     pes_path: bool,
+    smvba_pending_blocks: HashMap<SeqNumber, HashMap<PublicKey, Block>>, // buffering smvba's propose
+    spb_vote_sender: HashMap<SeqNumber, [HashSet<PublicKey>; 2]>, // set of nodes that send spb vote
+    spb_vote_weight: HashMap<SeqNumber, [Stake; 2]>,              // weight of the above nodes
+    spb_votes: HashMap<SeqNumber, [Vec<SPBVote>; 2]>,             // set of vote
+    randomness_share_sender: HashMap<SeqNumber, HashSet<PublicKey>>, // set of nodes that send randomness share
+    randomness_share_weight: HashMap<SeqNumber, Stake>,              // weight of the above nodes
+    randomness_shares: HashMap<SeqNumber, Vec<RandomnessShare>>,     // set of randomness share
+    random_coin: HashMap<SeqNumber, RandomCoin>,                     // random coin of each fallback
 }
 
 impl Core {
@@ -67,6 +77,7 @@ impl Core {
         committee: Committee,
         parameters: Parameters,
         signature_service: SignatureService,
+        pk_set: PublicKeySet,
         store: Store,
         leader_elector: LeaderElector,
         mempool_driver: MempoolDriver,
@@ -84,6 +95,7 @@ impl Core {
             parameters,
             signature_service,
             store,
+            pk_set,
             leader_elector,
             mempool_driver,
             synchronizer,
@@ -91,13 +103,31 @@ impl Core {
             commit_channel,
             core_channel,
             round: 1,
+            epoch: 0,
             last_voted_round: 0,
             last_committed_round: 0,
             high_qc: QC::genesis(),
             aggregator,
             opt_path,
             pes_path,
+            smvba_pending_blocks: HashMap::new(),
+            spb_vote_sender: HashMap::new(),
+            spb_vote_weight: HashMap::new(),
+            spb_votes: HashMap::new(),
+            randomness_share_sender: HashMap::new(),
+            randomness_share_weight: HashMap::new(),
+            randomness_shares: HashMap::new(),
+            random_coin: HashMap::new(),
         }
+    }
+
+    //初试化一个 epoch
+    fn epoch_init(&mut self, epoch: u64) {
+        self.round = 1;
+        self.epoch = epoch;
+        self.high_qc = QC::genesis();
+        self.last_voted_round = 0;
+        self.last_committed_round = 0;
     }
 
     async fn store_block(&mut self, block: &Block) {
@@ -193,7 +223,7 @@ impl Core {
         vote.verify(&self.committee)?;
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(qc) = self.aggregator.add_vote(vote.clone())? {
+        if let Some(qc) = self.aggregator.add_hs_vote(vote.clone())? {
             debug!("Assembled {:?}", qc);
 
             // Process the QC.
@@ -217,7 +247,7 @@ impl Core {
         debug!("Moved to round {}", self.round);
 
         // Cleanup the vote aggregator.
-        self.aggregator.cleanup(&self.round);
+        self.aggregator.cleanup_hs(&self.round);
     }
     // -- End Pacemaker --
 
@@ -232,6 +262,7 @@ impl Core {
             self.high_qc.clone(),
             self.name,
             self.round,
+            self.epoch,
             payload,
             self.signature_service.clone(),
             path,
@@ -250,7 +281,7 @@ impl Core {
 
         if path == OPT {
             // Process our new block and broadcast it.
-            let message = ConsensusMessage::Propose(block.clone());
+            let message = ConsensusMessage::HsPropose(block.clone());
             Synchronizer::transmit(
                 message,
                 &self.name,
@@ -336,7 +367,7 @@ impl Core {
             if next_leader == self.name {
                 self.handle_vote(&vote).await?;
             } else {
-                let message = ConsensusMessage::Vote(vote);
+                let message = ConsensusMessage::HSVote(vote);
                 Synchronizer::transmit(
                     message,
                     &self.name,
@@ -400,17 +431,43 @@ impl Core {
         Ok(())
     }
 
-    // daniel: dummy handlers
-    async fn handle_signed_qc(&mut self, _: SignedQC) -> ConsensusResult<()> {
-        Ok(())
-    }
-
     async fn handle_rs(&mut self, _: RandomnessShare) -> ConsensusResult<()> {
         Ok(())
     }
 
     async fn handle_rc(&mut self, _: RandomCoin) -> ConsensusResult<()> {
         Ok(())
+    }
+
+    async fn handle_spb_proposal(
+        &mut self,
+        value: SPBValue,
+        proof: SPBProof,
+    ) -> ConsensusResult<()> {
+        //是否同一阶段
+        ensure!(
+            value.phase() == proof.phase,
+            ConsensusError::SPBPhaseWrong(value.phase(), proof.phase)
+        );
+
+        //验证Proof是否正确
+        proof.verify(&self.committee, &self.pk_set)?;
+
+        Ok(())
+    }
+
+    async fn handle_spb_vote(&mut self, spb_vote: SPBVote) -> ConsensusResult<()> {
+        self.aggregator.add_spb_vote(spb_vote)?;
+        Ok(())
+    }
+
+    pub async fn run_epoch(&mut self) {
+        let mut epoch = 0u64;
+        loop {
+            self.epoch_init(epoch);
+            self.run().await; //运行当前epoch
+            epoch += 1;
+        }
     }
 
     pub async fn run(&mut self) {
@@ -431,15 +488,15 @@ impl Core {
             let result = tokio::select! {
                 Some(message) = self.core_channel.recv() => {
                     match message {
-                        ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
-                        ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
-                        ConsensusMessage::SignedQC(signed_qc) => self.handle_signed_qc(signed_qc).await,
+                        ConsensusMessage::HsPropose(block) => self.handle_proposal(&block).await,
+                        ConsensusMessage::HSVote(vote) => self.handle_vote(&vote).await,
                         ConsensusMessage::RandomnessShare(rs) => self.handle_rs(rs).await,
                         ConsensusMessage::RandomCoin(rc) => self.handle_rc(rc).await,
                         ConsensusMessage::LoopBack(block) => self.process_block(&block).await,
                         ConsensusMessage::SyncRequest(digest, sender) => self.handle_sync_request(digest, sender).await,
                         ConsensusMessage::SyncReply(block) => self.handle_proposal(&block).await,
-                        _ => break,
+                        ConsensusMessage::SPBPropose(value,proof)=> self.handle_spb_proposal(value,proof).await,
+                        ConsensusMessage::SPBVote(vote)=> self.handle_spb_vote(vote).await,
                     }
                 },
                 else => break,
@@ -447,6 +504,7 @@ impl Core {
             match result {
                 Ok(()) => (),
                 Err(ConsensusError::SerializationError(e)) => error!("Store corrupted. {}", e),
+                Err(ConsensusError::PESOutput) => return, //ABA输出1 直接退出当前epoch
                 Err(e) => warn!("{}", e),
             }
         }

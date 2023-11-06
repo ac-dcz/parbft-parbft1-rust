@@ -41,7 +41,7 @@ impl Filter {
 
     async fn delay(input: FilterInput, parameters: Parameters) -> FilterInput {
         let (message, _) = &input;
-        if let ConsensusMessage::Propose(block) = message {
+        if let ConsensusMessage::HsPropose(_) = message {
             // NOTE: Increase the delay here (you can use any value from the 'parameters').
             // Only add network delay for non-fallback block proposals
             if parameters.ddos {

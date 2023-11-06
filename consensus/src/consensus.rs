@@ -99,6 +99,7 @@ impl Consensus {
                     committee,
                     parameters,
                     signature_service,
+                    pk_set,
                     store,
                     leader_elector,
                     mempool_driver,
@@ -110,7 +111,7 @@ impl Consensus {
                     false,
                 );
                 tokio::spawn(async move {
-                    opt_path.run().await;
+                    opt_path.run_epoch().await;
                 });
             }
             Protocol::HotStuffAndSMVBA => {
@@ -120,6 +121,7 @@ impl Consensus {
                     committee,
                     parameters,
                     signature_service,
+                    pk_set,
                     store,
                     leader_elector,
                     mempool_driver,
@@ -131,7 +133,7 @@ impl Consensus {
                     true,
                 );
                 tokio::spawn(async move {
-                    opt_with_pes_path.run().await;
+                    opt_with_pes_path.run_epoch().await;
                 });
             }
             Protocol::SMVBA => {
@@ -141,6 +143,7 @@ impl Consensus {
                     committee,
                     parameters,
                     signature_service,
+                    pk_set,
                     store,
                     leader_elector,
                     mempool_driver,
@@ -152,7 +155,7 @@ impl Consensus {
                     true,
                 );
                 tokio::spawn(async move {
-                    pes_path.run().await;
+                    pes_path.run_epoch().await;
                 });
             }
             _ => {

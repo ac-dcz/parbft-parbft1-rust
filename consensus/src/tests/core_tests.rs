@@ -70,21 +70,30 @@ async fn handle_proposal() {
     // Make a block and the vote we expect to receive.
     let block = chain(vec![leader_keys(1)]).pop().unwrap();
     let (public_key, secret_key) = keys().pop().unwrap();
-    let vote = Vote::new_from_key(block.digest(), block.view, block.round, block.height, block.fallback, block.author, public_key, &secret_key);
+    let vote = Vote::new_from_key(
+        block.digest(),
+        block.view,
+        block.round,
+        block.height,
+        block.fallback,
+        block.author,
+        public_key,
+        &secret_key,
+    );
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
     let (tx_core, mut rx_network, _rx_commit) = core(public_key, secret_key, store_path).await;
 
     // Send a block to the core.
-    let message = ConsensusMessage::Propose(block.clone());
+    let message = ConsensusMessage::HsPropose(block.clone());
     tx_core.send(message).await.unwrap();
 
     // Ensure we get a vote back.
     match rx_network.recv().await {
         Some((message, recipient)) => {
             match message {
-                ConsensusMessage::Vote(v) => assert_eq!(v, vote),
+                ConsensusMessage::HSVote(v) => assert_eq!(v, vote),
                 _ => assert!(false),
             }
             let (next_leader, _) = leader_keys(2);
@@ -107,7 +116,16 @@ async fn generate_proposal() {
     let votes: Vec<_> = keys()
         .iter()
         .map(|(public_key, secret_key)| {
-            Vote::new_from_key(hash.clone(), block.view, block.round, block.height, block.fallback, block.author, *public_key, &secret_key)
+            Vote::new_from_key(
+                hash.clone(),
+                block.view,
+                block.round,
+                block.height,
+                block.fallback,
+                block.author,
+                *public_key,
+                &secret_key,
+            )
         })
         .collect();
     let qc = QC {
@@ -132,7 +150,7 @@ async fn generate_proposal() {
 
     // Send all votes to the core.
     for vote in votes.clone() {
-        let message = ConsensusMessage::Vote(vote);
+        let message = ConsensusMessage::HSVote(vote);
         tx_core.send(message).await.unwrap();
     }
 
@@ -140,7 +158,7 @@ async fn generate_proposal() {
     match rx_network.recv().await {
         Some((message, mut recipients)) => {
             match message {
-                ConsensusMessage::Propose(b) => {
+                ConsensusMessage::HsPropose(b) => {
                     assert_eq!(b.round, 2);
                     assert_eq!(b.qc, qc);
                 }
@@ -169,7 +187,7 @@ async fn commit_block() {
     // Send a the blocks to the core.
     let committed = chain[0].clone();
     for block in chain {
-        let message = ConsensusMessage::Propose(block);
+        let message = ConsensusMessage::HsPropose(block);
         tx_core.send(message).await.unwrap();
     }
 

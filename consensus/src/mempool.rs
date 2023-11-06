@@ -52,7 +52,7 @@ impl MempoolDriver {
             .expect("Failed to receive payload status from mempool")
         {
             PayloadStatus::Accept => Ok(true),
-            PayloadStatus::Reject => bail!(ConsensusError::InvalidPayload),
+            PayloadStatus::Reject => Err(ConsensusError::InvalidPayload),
             PayloadStatus::Wait => Ok(false),
         }
     }

@@ -33,6 +33,9 @@ pub enum ConsensusError {
     #[error("Node {0} is not in the committee")]
     NotInCommittee(PublicKey),
 
+    #[error("Phase Wrong value:{0} proof:{1}")]
+    SPBPhaseWrong(u8, u8),
+
     #[error("Invalid signature")]
     InvalidSignature(#[from] CryptoError),
 
@@ -54,6 +57,9 @@ pub enum ConsensusError {
     #[error("Received more than one random share from {0}")]
     AuthorityReuseinCoin(PublicKey),
 
+    #[error("Received more than one vote from {0}")]
+    AuthorityReuseinSPB(PublicKey),
+
     #[error("Received vote from unknown authority {0}")]
     UnknownAuthority(PublicKey),
 
@@ -65,6 +71,9 @@ pub enum ConsensusError {
 
     #[error("Received RandomCoin without a quorum")]
     RandomCoinRequiresQuorum,
+
+    #[error("Received SPBVote without a quorum")]
+    SPBRequiresQuorum,
 
     #[error("Malformed block {0}")]
     MalformedBlock(Digest),
@@ -85,4 +94,7 @@ pub enum ConsensusError {
         rd2: SeqNumber,
         rd3: SeqNumber,
     },
+
+    #[error("PES path output")]
+    PESOutput,
 }

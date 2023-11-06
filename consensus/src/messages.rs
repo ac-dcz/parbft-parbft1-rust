@@ -5,10 +5,10 @@ use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
-use std::fmt;
-use threshold_crypto::{PublicKeySet, SignatureShare};
+use std::{fmt, hash, vec};
+use threshold_crypto::{PublicKeySet, SecretKeyShare, SignatureShare};
 
 #[cfg(test)]
 #[path = "tests/messages_tests.rs"]
@@ -20,6 +20,7 @@ pub struct Block {
     pub qc: QC, //前一个节点的highQC
     pub author: PublicKey,
     pub round: SeqNumber,
+    pub epoch: SeqNumber,
     pub payload: Vec<Digest>,
     pub signature: Signature,
     pub path_tag: u8,
@@ -30,6 +31,7 @@ impl Block {
         qc: QC,
         author: PublicKey,
         round: SeqNumber,
+        epoch: SeqNumber,
         payload: Vec<Digest>,
         mut signature_service: SignatureService,
         path_tag: u8,
@@ -38,6 +40,7 @@ impl Block {
             qc,
             author,
             round,
+            epoch,
             payload,
             signature: Signature::default(),
             path_tag,
@@ -63,12 +66,6 @@ impl Block {
             ConsensusError::UnknownAuthority(self.author)
         );
 
-        // ensure!(
-        //     (self.fallback == 0 && self.height == 0)
-        //         || (self.fallback == 1 && (self.height == 1 || self.height == 2)),
-        //     ConsensusError::InvalidHeight(self.height)
-        // );
-
         // Check the signature.
         self.signature.verify(&self.digest(), &self.author)?;
 
@@ -77,10 +74,6 @@ impl Block {
             self.qc.verify(committee)?;
         }
 
-        // Check the TC embedded in the block (if any).
-        // if let Some(ref tc) = self.tc {
-        //     tc.verify(committee)?;
-        // }
         Ok(())
     }
 }
@@ -90,6 +83,7 @@ impl Hash for Block {
         let mut hasher = Sha512::new();
         hasher.update(self.author.0);
         hasher.update(self.round.to_le_bytes());
+        hasher.update(self.epoch.to_le_bytes());
         for x in &self.payload {
             hasher.update(x);
         }
@@ -102,10 +96,11 @@ impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B(author {} , round {}, qc {:?}, payload_len {})",
+            "{}: B(author {}, round {}, epoch {}, qc {:?}, payload_len {})",
             self.digest(),
             self.author,
             self.round,
+            self.epoch,
             self.qc,
             self.payload.iter().map(|x| x.size()).sum::<usize>(),
         )
@@ -122,6 +117,7 @@ impl fmt::Display for Block {
 pub struct Vote {
     pub hash: Digest,
     pub round: SeqNumber,
+    pub epoch: SeqNumber,
     pub proposer: PublicKey, // proposer of the block
     pub author: PublicKey,
     pub signature: Signature,
@@ -136,6 +132,7 @@ impl Vote {
         let vote = Self {
             hash: block.digest(),
             round: block.round,
+            epoch: block.epoch,
             proposer: block.author,
             author,
             signature: Signature::default(),
@@ -151,12 +148,6 @@ impl Vote {
             ConsensusError::UnknownAuthority(self.author)
         );
 
-        // ensure!(
-        //     (self.fallback == 0 && self.height == 0)
-        //         || (self.fallback == 1 && (self.height == 1 || self.height == 2)),
-        //     ConsensusError::InvalidHeight(self.height)
-        // );
-
         // Check the signature.
         self.signature.verify(&self.digest(), &self.author)?;
         Ok(())
@@ -168,6 +159,7 @@ impl Hash for Vote {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
         hasher.update(self.round.to_le_bytes());
+        hasher.update(self.epoch.to_le_bytes());
         hasher.update(self.proposer.0);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -177,8 +169,8 @@ impl fmt::Debug for Vote {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "Vote(blockhash {}, proposer {}, round {},  voter {})",
-            self.hash, self.proposer, self.round, self.author
+            "Vote(blockhash {}, proposer {}, round {}, epoch {},  voter {})",
+            self.hash, self.proposer, self.round, self.epoch, self.author
         )
     }
 }
@@ -189,10 +181,201 @@ impl fmt::Display for Vote {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub enum SPBValue {
+    B(Block),
+    D(Digest, PublicKey, Signature),
+}
+
+impl SPBValue {
+    pub fn phase(&self) -> u8 {
+        match self {
+            SPBValue::B(..) => 1u8,
+            SPBValue::D(..) => 2u8,
+        }
+    }
+    pub fn proposer(&self) -> PublicKey {
+        match self {
+            SPBValue::B(b) => b.author,
+            SPBValue::D(_, p, _) => p.clone(),
+        }
+    }
+    pub fn verify(
+        &self,
+        committee: &Committee,
+        proof: &SPBProof,
+        pk_set: &PublicKeySet,
+    ) -> ConsensusResult<()> {
+        match self {
+            SPBValue::B(b) => b.verify(committee),
+            SPBValue::D(_, name, sig) => {
+                let voting_rights = committee.stake(name);
+                ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(*name));
+
+                // Check the signature.
+                sig.verify(&self.digest(), name)?;
+
+                // Check the proof
+                proof.verify(committee, pk_set)?;
+
+                Ok(())
+            }
+        }
+    }
+}
+
+impl Hash for SPBValue {
+    fn digest(&self) -> Digest {
+        match self {
+            SPBValue::B(b) => b.digest(),
+            SPBValue::D(d, name, _) => {
+                let mut hasher = Sha512::new();
+                hasher.update(d);
+                hasher.update(name.0);
+                hasher.update(vec![2u8]);
+                Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+            }
+        }
+    }
+}
+
+impl fmt::Debug for SPBValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "SPBValue(proposer {}, pahse {})",
+            self.proposer(),
+            self.phase(),
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SPBVote {
+    pub hash: Digest,
+    pub phase: u8,
+    pub round: SeqNumber,
+    pub epoch: SeqNumber,
+    pub proposer: PublicKey,
+    pub author: PublicKey,
+    pub signature_share: SignatureShare,
+}
+
+impl SPBVote {
+    pub async fn new(
+        value: SPBValue,
+        round: SeqNumber,
+        epoch: SeqNumber,
+        author: PublicKey,
+        mut signature_service: SignatureService,
+    ) -> Self {
+        let mut hasher = Sha512::new();
+        hasher.update(value.digest());
+        hasher.update(round.to_le_bytes());
+        hasher.update(epoch.to_le_bytes());
+        let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+        let signature_share = signature_service
+            .request_tss_signature(digest)
+            .await
+            .unwrap();
+
+        Self {
+            hash: value.digest(),
+            phase: value.phase(),
+            round,
+            epoch,
+            proposer: value.proposer(),
+            author,
+            signature_share,
+        }
+    }
+
+    //验证门限签名是否正确
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.author) > 0,
+            ConsensusError::UnknownAuthority(self.author)
+        );
+        let tss_pk = pk_set.public_key_share(committee.id(self.author));
+        // Check the signature.
+        ensure!(
+            tss_pk.verify(&self.signature_share, &self.digest()),
+            ConsensusError::InvalidThresholdSignature(self.author)
+        );
+
+        Ok(())
+    }
+}
+
+impl Hash for SPBVote {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(&self.hash);
+        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.epoch.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for SPBVote {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "RandomnessShare (author {}, view {}, sig share {:?})",
+            self.author, self.round, self.signature_share
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SPBProof {
+    pub hash: Digest,
+    pub phase: u8, //SPB的哪一个阶段
+    pub shares: Vec<SPBVote>,
+}
+
+impl SPBProof {
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+        if self.phase == 1 {
+            //第一阶段不做检查
+            return Ok(());
+        }
+
+        //第二阶段检查签名是否正确
+        let mut weight = 0;
+        for share in self.shares.iter() {
+            if share.hash == self.hash {
+                let name = share.author;
+                let voting_rights = committee.stake(&name);
+                ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(name));
+                weight += voting_rights;
+            }
+        }
+        ensure!(
+            weight >= committee.spb_vote_threshold(), //f+1
+            ConsensusError::SPBRequiresQuorum
+        );
+
+        for share in &self.shares {
+            share.verify(committee, pk_set)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Debug for SPBProof {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "SPB(phase {})", self.phase)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct QC {
     pub hash: Digest,
     pub round: SeqNumber,
+    pub epoch: SeqNumber,
     pub proposer: PublicKey, // proposer of the block
     pub acceptor: PublicKey, // Node that accepts the QC and builds its f-chain extending it
     pub votes: Vec<(PublicKey, Signature)>,
@@ -209,8 +392,8 @@ impl QC {
 
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
         // Ensure the QC has a quorum.
-        let mut weight = 0;
-        let mut used = HashSet::new();
+        let mut weight = 0; //票数
+        let mut used = HashSet::new(); //防止重复统计
         for (name, _) in self.votes.iter() {
             ensure!(
                 !used.contains(name),
@@ -226,12 +409,6 @@ impl QC {
             ConsensusError::QCRequiresQuorum
         );
 
-        // ensure!(
-        //     (self.fallback == 0 && self.height == 0)
-        //         || (self.fallback == 1 && (self.height == 1 || self.height == 2)),
-        //     ConsensusError::InvalidHeight(self.height)
-        // );
-
         // Check the signatures.
         Signature::verify_batch(&self.digest(), &self.votes).map_err(ConsensusError::from)
     }
@@ -242,6 +419,7 @@ impl Hash for QC {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
         hasher.update(self.round.to_le_bytes());
+        hasher.update(self.epoch.to_le_bytes());
         hasher.update(self.proposer.0);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -259,79 +437,18 @@ impl fmt::Debug for QC {
 
 impl PartialEq for QC {
     fn eq(&self, other: &Self) -> bool {
-        self.hash == other.hash && self.round == other.round && self.proposer == other.proposer
+        self.hash == other.hash
+            && self.round == other.round
+            && self.epoch == self.epoch
+            && self.proposer == other.proposer
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SignedQC {
-    pub qc: QC,
-    pub random_coin: Option<RandomCoin>, // the signed QC to trigger leader election contains no random_coin, the signed QC to update leader's high QC contains random coin
-    pub author: PublicKey,
-    pub signature: Signature,
-}
-
-impl SignedQC {
-    pub async fn new(
-        qc: QC,
-        random_coin: Option<RandomCoin>,
-        author: PublicKey,
-        mut signature_service: SignatureService,
-    ) -> Self {
-        let signed_qc = Self {
-            qc,
-            random_coin,
-            author,
-            signature: Signature::default(),
-        };
-        let signature = signature_service
-            .request_signature(signed_qc.digest())
-            .await;
-        Self {
-            signature,
-            ..signed_qc
-        }
-    }
-
-    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
-        // Ensure the authority has voting rights.
-        ensure!(
-            committee.stake(&self.author) > 0,
-            ConsensusError::UnknownAuthority(self.author)
-        );
-
-        // Check the signature.
-        self.signature.verify(&self.digest(), &self.author)?;
-
-        // Check the embedded QC.
-        if self.qc != QC::genesis() {
-            self.qc.verify(committee)?;
-        }
-        Ok(())
-    }
-}
-
-impl Hash for SignedQC {
-    fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        hasher.update(self.qc.digest());
-        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
-    }
-}
-
-impl fmt::Debug for SignedQC {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "Signed QC(author {}, qc {:?}, random coin {:?})",
-            self.author, self.qc, self.random_coin
-        )
-    }
-}
-
+// leader选举时 每个发送自己的randomshare
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RandomnessShare {
-    pub seq: SeqNumber, // view
+    pub round: SeqNumber, // round
+    pub epoch: SeqNumber,
     pub author: PublicKey,
     pub signature_share: SignatureShare,
     pub high_qc: Option<QC>, // attach its height-2 qc in the randomness share as an optimization
@@ -339,20 +456,23 @@ pub struct RandomnessShare {
 
 impl RandomnessShare {
     pub async fn new(
-        seq: SeqNumber,
+        round: SeqNumber,
+        epoch: SeqNumber,
         author: PublicKey,
         mut signature_service: SignatureService,
         high_qc: Option<QC>,
     ) -> Self {
         let mut hasher = Sha512::new();
-        hasher.update(seq.to_le_bytes());
+        hasher.update(round.to_le_bytes());
+        hasher.update(epoch.to_le_bytes());
         let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
         let signature_share = signature_service
             .request_tss_signature(digest)
             .await
             .unwrap();
         Self {
-            seq,
+            round,
+            epoch,
             author,
             signature_share,
             high_qc,
@@ -379,7 +499,8 @@ impl RandomnessShare {
 impl Hash for RandomnessShare {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(self.seq.to_le_bytes());
+        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.epoch.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -389,14 +510,16 @@ impl fmt::Debug for RandomnessShare {
         write!(
             f,
             "RandomnessShare (author {}, view {}, sig share {:?})",
-            self.author, self.seq, self.signature_share
+            self.author, self.round, self.signature_share
         )
     }
 }
 
+// f+1 个 RandomnessShare 合成的
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct RandomCoin {
-    pub seq: SeqNumber,    // view
+    pub round: SeqNumber, // round
+    pub epoch: SeqNumber,
     pub leader: PublicKey, // elected leader of the view
     pub shares: Vec<RandomnessShare>,
 }
@@ -418,12 +541,12 @@ impl RandomCoin {
             weight += voting_rights;
         }
         ensure!(
-            weight >= committee.random_coin_threshold(),
+            weight >= committee.random_coin_threshold(), //f+1
             ConsensusError::RandomCoinRequiresQuorum
         );
 
-        let mut sigs = BTreeMap::new();
-        // Check the random shares.
+        let mut sigs = BTreeMap::new(); //构建BTree选择leader
+                                        // Check the random shares.
         for share in &self.shares {
             share.verify(committee, pk_set)?;
             sigs.insert(committee.id(share.author), share.signature_share.clone());
@@ -448,6 +571,10 @@ impl RandomCoin {
 
 impl fmt::Debug for RandomCoin {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "RandomCoin(view {}, leader {})", self.seq, self.leader)
+        write!(
+            f,
+            "RandomCoin(epoch {}, round {}, leader {})",
+            self.epoch, self.round, self.leader
+        )
     }
 }
