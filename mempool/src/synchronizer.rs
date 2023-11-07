@@ -58,7 +58,7 @@ impl Synchronizer {
 
                             let block_digest = block.digest();
                             let author = block.author;
-                            let round = block.round;
+                            let round = block.height;
                             if pending.contains_key(&block_digest) {    //如果处理过，就不用在处理了
                                 continue;
                             }

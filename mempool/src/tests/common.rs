@@ -62,7 +62,7 @@ pub fn block() -> Block {
     let block = Block {
         qc: QC::genesis(),
         author,
-        round: 1,
+        height: 1,
         epoch: 1,
         payload: Vec::new(),
         signature: Signature::default(),
