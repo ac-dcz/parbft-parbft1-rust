@@ -66,7 +66,6 @@ pub fn block() -> Block {
         epoch: 1,
         payload: Vec::new(),
         signature: Signature::default(),
-        path_tag: 0,
     };
     let signature = Signature::new(&block.digest(), &secret);
     Block { signature, ..block }
