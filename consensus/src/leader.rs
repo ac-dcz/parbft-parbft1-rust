@@ -1,14 +1,15 @@
+use std::collections::HashMap;
+
 use crate::config::Committee;
 use crate::core::SeqNumber;
 use crate::messages::RandomCoin;
 use crypto::PublicKey;
-use std::collections::HashMap;
 
 pub type LeaderElector = RandomLeaderElector;
 
 pub struct RandomLeaderElector {
     committee: Committee,
-    random_coins: HashMap<SeqNumber, RandomCoin>,
+    random_coins: HashMap<(SeqNumber, SeqNumber), RandomCoin>,
 }
 
 impl RandomLeaderElector {
@@ -26,13 +27,14 @@ impl RandomLeaderElector {
     }
 
     pub fn add_random_coin(&mut self, random_coin: RandomCoin) {
-        self.random_coins.insert(random_coin.round, random_coin);
+        self.random_coins
+            .insert((random_coin.height, random_coin.round), random_coin);
     }
 
-    pub fn get_coin_leader(&self, view: SeqNumber) -> Option<PublicKey> {
-        if !self.random_coins.contains_key(&view) {
+    pub fn get_coin_leader(&self, height: SeqNumber, round: SeqNumber) -> Option<PublicKey> {
+        if !self.random_coins.contains_key(&(height, round)) {
             return None;
         }
-        Some(self.random_coins.get(&view).unwrap().leader)
+        Some(self.random_coins.get(&(height, round)).unwrap().leader)
     }
 }

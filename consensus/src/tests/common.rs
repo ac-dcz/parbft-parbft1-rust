@@ -1,7 +1,7 @@
 use crate::config::Committee;
-use crate::core::{SeqNumber, HeightNumber, Bool};
+use crate::core::{Bool, HeightNumber, SeqNumber};
 use crate::mempool::{ConsensusMempoolMessage, PayloadStatus};
-use crate::messages::{Block, Timeout, Vote, QC};
+use crate::messages::{Block, HVote, Timeout, QC};
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
 use rand::rngs::StdRng;
@@ -57,7 +57,7 @@ impl Block {
             coin: None,
             author,
             view,
-            round,
+            height: round,
             height,
             fallback,
             payload,
@@ -74,7 +74,7 @@ impl PartialEq for Block {
     }
 }
 
-impl Vote {
+impl HVote {
     pub fn new_from_key(
         hash: Digest,
         view: SeqNumber,
@@ -88,7 +88,7 @@ impl Vote {
         let vote = Self {
             hash,
             view,
-            round,
+            height: round,
             height,
             fallback,
             proposer,
@@ -100,7 +100,7 @@ impl Vote {
     }
 }
 
-impl PartialEq for Vote {
+impl PartialEq for HVote {
     fn eq(&self, other: &Self) -> bool {
         self.digest() == other.digest()
     }
@@ -136,13 +136,31 @@ impl PartialEq for Timeout {
 // Fixture.
 pub fn block() -> Block {
     let (public_key, secret_key) = keys().pop().unwrap();
-    Block::new_from_key(QC::genesis(), public_key, 0, 1, 0, 0, Vec::new(), &secret_key)
+    Block::new_from_key(
+        QC::genesis(),
+        public_key,
+        0,
+        1,
+        0,
+        0,
+        Vec::new(),
+        &secret_key,
+    )
 }
 
 // Fixture.
-pub fn vote() -> Vote {
+pub fn vote() -> HVote {
     let (public_key, secret_key) = keys().pop().unwrap();
-    Vote::new_from_key(block().digest(), 0, 1, 0, 0, block().author, public_key, &secret_key)
+    HVote::new_from_key(
+        block().digest(),
+        0,
+        1,
+        0,
+        0,
+        block().author,
+        public_key,
+        &secret_key,
+    )
 }
 
 // Fixture.
@@ -152,7 +170,7 @@ pub fn qc() -> QC {
     let qc = QC {
         hash: Digest::default(),
         view: 0,
-        round: 1,
+        height: 1,
         height: 0,
         fallback: 0,
         proposer: public_key,
@@ -192,7 +210,7 @@ pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
             let qc = QC {
                 hash: block.digest(),
                 view: block.view,
-                round: block.round,
+                height: block.height,
                 height: block.height,
                 fallback: block.fallback,
                 proposer: block.author,

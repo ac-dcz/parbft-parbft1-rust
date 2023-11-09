@@ -16,7 +16,7 @@ fn make_qc() {
     let qc = qc();
     let hash = qc.digest();
     let view = qc.view;
-    let round = qc.round;
+    let round = qc.height;
     let height = qc.height;
     let fallback = qc.fallback;
     let proposer = qc.proposer;
@@ -24,7 +24,7 @@ fn make_qc() {
     // Add 2f+1 votes to the aggregator and ensure it returns the cryptographic
     // material to make a valid QC.
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = Vote::new_from_key(
+    let vote = HVote::new_from_key(
         hash.clone(),
         view,
         round,
@@ -39,7 +39,7 @@ fn make_qc() {
     assert!(result.unwrap().is_none());
 
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = Vote::new_from_key(
+    let vote = HVote::new_from_key(
         hash.clone(),
         view,
         round,
@@ -54,7 +54,7 @@ fn make_qc() {
     assert!(result.unwrap().is_none());
 
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = Vote::new_from_key(
+    let vote = HVote::new_from_key(
         hash.clone(),
         view,
         round,
@@ -81,7 +81,7 @@ fn cleanup() {
     assert!(aggregator.timeouts_aggregators.is_empty());
 
     // Clean up the aggregator.
-    aggregator.cleanup_hs(&2);
+    aggregator.cleanup_hs_vote(&2);
     assert!(aggregator.hs_votes_aggregators.is_empty());
     assert!(aggregator.timeouts_aggregators.is_empty());
 }

@@ -70,10 +70,10 @@ async fn handle_proposal() {
     // Make a block and the vote we expect to receive.
     let block = chain(vec![leader_keys(1)]).pop().unwrap();
     let (public_key, secret_key) = keys().pop().unwrap();
-    let vote = Vote::new_from_key(
+    let vote = HVote::new_from_key(
         block.digest(),
         block.view,
-        block.round,
+        block.height,
         block.height,
         block.fallback,
         block.author,
@@ -116,10 +116,10 @@ async fn generate_proposal() {
     let votes: Vec<_> = keys()
         .iter()
         .map(|(public_key, secret_key)| {
-            Vote::new_from_key(
+            HVote::new_from_key(
                 hash.clone(),
                 block.view,
-                block.round,
+                block.height,
                 block.height,
                 block.fallback,
                 block.author,
@@ -131,7 +131,7 @@ async fn generate_proposal() {
     let qc = QC {
         hash,
         view: block.view,
-        round: block.round,
+        height: block.height,
         height: block.height,
         fallback: block.fallback,
         proposer: block.author,
@@ -159,7 +159,7 @@ async fn generate_proposal() {
         Some((message, mut recipients)) => {
             match message {
                 ConsensusMessage::HsPropose(b) => {
-                    assert_eq!(b.round, 2);
+                    assert_eq!(b.height, 2);
                     assert_eq!(b.qc, qc);
                 }
                 _ => assert!(false),

@@ -36,11 +36,17 @@ pub enum ConsensusError {
     #[error("Phase Wrong value:{0} proof:{1}")]
     SPBPhaseWrong(u8, u8),
 
+    #[error("Invalid finish phase proof")]
+    InvalidFinProof(),
+
     #[error("Invalid signature")]
     InvalidSignature(#[from] CryptoError),
 
     #[error("Invalid threshold signature from {0}")]
     InvalidThresholdSignature(PublicKey),
+
+    #[error("timeout smvba message height {0},round {0}")]
+    TimeOutMessage(SeqNumber, SeqNumber),
 
     #[error("Random coin with wrong leader")]
     RandomCoinWithWrongLeader,

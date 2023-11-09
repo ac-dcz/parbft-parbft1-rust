@@ -65,19 +65,19 @@ impl MempoolDriver {
             .chain(b1.payload.iter().cloned())
             .chain(block.payload.iter().cloned())
             .collect();
-        let message = ConsensusMempoolMessage::Cleanup(digests, block.round);
+        let message = ConsensusMempoolMessage::Cleanup(digests, block.height);
         self.mempool_channel
             .send(message)
             .await
             .expect("Failed to send message to mempool");
     }
 
-    pub async fn cleanup_async(&mut self, b0: &Block) {
-        let digests = b0.payload.iter().cloned().collect();
-        let message = ConsensusMempoolMessage::Cleanup(digests, b0.round);
-        self.mempool_channel
-            .send(message)
-            .await
-            .expect("Failed to send message to mempool");
-    }
+    // pub async fn cleanup_async(&mut self, b0: &Block) {
+    //     let digests = b0.payload.iter().cloned().collect();
+    //     let message = ConsensusMempoolMessage::Cleanup(digests, b0.height);
+    //     self.mempool_channel
+    //         .send(message)
+    //         .await
+    //         .expect("Failed to send message to mempool");
+    // }
 }
