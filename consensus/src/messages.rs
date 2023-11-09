@@ -414,11 +414,11 @@ pub enum PreVoteTag {
 }
 
 impl PreVoteTag {
-    async fn new_yes(v: SPBValue, p: SPBProof) -> PreVoteTag {
+    pub async fn new_yes(v: SPBValue, p: SPBProof) -> PreVoteTag {
         Self::Yes(v, p)
     }
 
-    async fn new_no() -> PreVoteTag {
+    pub async fn new_no() -> PreVoteTag {
         Self::No()
     }
 
@@ -451,7 +451,7 @@ impl PreVoteTag {
     //     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     // }
 
-    fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
         match self {
             Self::Yes(v, p) => v.verify(committee, p, pk_set),
             Self::No() => {
@@ -463,6 +463,13 @@ impl PreVoteTag {
                 // );
                 Ok(())
             }
+        }
+    }
+
+    pub fn is_yes(&self) -> bool {
+        match self {
+            Self::Yes(..) => true,
+            _ => false,
         }
     }
 }
@@ -519,7 +526,7 @@ impl MPreVote {
         return pvote;
     }
 
-    fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
         // Ensure the authority has voting rights.
         let voting_rights = committee.stake(&self.author);
         ensure!(
@@ -533,6 +540,10 @@ impl MPreVote {
         self.tag.verify(committee, pk_set)?;
 
         Ok(())
+    }
+
+    pub fn is_yes(&self) -> bool {
+        self.tag.is_yes()
     }
 }
 
@@ -566,7 +577,7 @@ pub enum MVoteTag {
 }
 
 impl MVoteTag {
-    async fn new_yes(
+    pub async fn new_yes(
         author: PublicKey,
         value: SPBValue,
         proof: SPBProof,
@@ -576,11 +587,11 @@ impl MVoteTag {
         Self::Yes(value, proof, spbvote)
     }
 
-    async fn new_no() -> Self {
+    pub async fn new_no() -> Self {
         Self::No()
     }
 
-    fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
         match self {
             Self::Yes(value, proof, prevote) => {
                 value.verify(committee, proof, pk_set)?;
@@ -652,7 +663,7 @@ impl MVote {
         return pvote;
     }
 
-    fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
         // Ensure the authority has voting rights.
         let voting_rights = committee.stake(&self.author);
         ensure!(
@@ -726,7 +737,7 @@ impl MHalt {
         return halt;
     }
 
-    fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
         // Ensure the authority has voting rights.
         let voting_rights = committee.stake(&self.author);
         ensure!(

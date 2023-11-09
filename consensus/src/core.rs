@@ -5,8 +5,8 @@ use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 use crate::messages::{
-    Block, HVote, MDone, MHalt, MPreVote, MVote, RandomCoin, RandomnessShare, SPBProof, SPBValue,
-    SPBVote, QC,
+    Block, HVote, MDone, MHalt, MPreVote, MVote, MVoteTag, PreVoteTag, RandomCoin, RandomnessShare,
+    SPBProof, SPBValue, SPBVote, QC,
 };
 use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::collections::{HashMap, HashSet, VecDeque};
 use store::Store;
-use threshold_crypto::ff::PrimeField;
 use threshold_crypto::PublicKeySet;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration};
@@ -83,9 +82,9 @@ pub struct Core {
     spb_current_phase: HashMap<(SeqNumber, SeqNumber), u8>,
     smvba_dones: HashMap<(SeqNumber, SeqNumber), Stake>,
     smvba_current_round: HashMap<SeqNumber, SeqNumber>, // height->round
-    smvba_yes_votes: HashMap<(SeqNumber, SeqNumber), Vec<MVote>>,
-    smvba_no_votes: HashMap<(SeqNumber, SeqNumber), Vec<MVote>>,
-    smvba_no_prevotes: HashMap<(SeqNumber, SeqNumber), Vec<MPreVote>>,
+    // smvba_yes_votes: HashMap<(SeqNumber, SeqNumber), Vec<MVote>>,
+    smvba_votes: HashMap<(SeqNumber, SeqNumber), Stake>,
+    smvba_no_prevotes: HashMap<(SeqNumber, SeqNumber), Stake>,
     prepare_tag: HashSet<SeqNumber>, //标记 height高度的 tag是否已经发送
 }
 
@@ -138,8 +137,8 @@ impl Core {
             spb_current_phase: HashMap::new(),
             smvba_current_round: HashMap::new(),
             smvba_dones: HashMap::new(),
-            smvba_yes_votes: HashMap::new(),
-            smvba_no_votes: HashMap::new(),
+            // smvba_yes_votes: HashMap::new(),
+            smvba_votes: HashMap::new(),
             smvba_no_prevotes: HashMap::new(),
             prepare_tag: HashSet::new(),
         }
@@ -157,8 +156,8 @@ impl Core {
         self.spb_proposes = HashMap::new();
         self.spb_finishs = HashMap::new();
         self.smvba_current_round = HashMap::new();
-        self.smvba_yes_votes = HashMap::new();
-        self.smvba_no_votes = HashMap::new();
+        // self.smvba_yes_votes = HashMap::new();
+        self.smvba_votes = HashMap::new();
         self.smvba_no_prevotes = HashMap::new();
         self.prepare_tag = HashSet::new();
         self.smvba_y_flag = HashMap::new();
@@ -168,14 +167,16 @@ impl Core {
         self.smvba_dones = HashMap::new();
     }
 
-    fn init_smvba_state(&mut self) {
+    fn init_smvba_state(&mut self, height: SeqNumber, round: SeqNumber) {
         //每人都从第一轮开始
-        self.smvba_current_round.insert(self.height, 1);
-        self.smvba_d_flag.insert((self.height, 1), false);
-        self.smvba_y_flag.insert((self.height, 1), false);
-        self.smvba_n_flag.insert((self.height, 1), false);
-        self.spb_current_phase.insert((self.height, 1), INIT_PHASE);
-        self.smvba_dones.insert((self.height, 1), 0);
+        self.smvba_current_round.insert(height, round);
+        self.smvba_d_flag.insert((height, round), false);
+        self.smvba_y_flag.insert((height, round), false);
+        self.smvba_n_flag.insert((height, round), false);
+        self.spb_current_phase.insert((height, round), INIT_PHASE);
+        self.smvba_dones.insert((height, round), 0);
+        self.smvba_no_prevotes.insert((height, round), 0);
+        self.smvba_votes.insert((height, round), 0);
     }
 
     fn clean_smvba_state(&mut self, height: &SeqNumber) {
@@ -183,8 +184,8 @@ impl Core {
         self.spb_proposes.retain(|(h, _), _| h >= height);
         self.spb_finishs.retain(|(h, _), _| h >= height);
         self.spb_locks.retain(|(h, _), _| h >= height);
-        self.smvba_yes_votes.retain(|(h, _), _| h >= height);
-        self.smvba_no_votes.retain(|(h, _), _| h >= height);
+        // self.smvba_yes_votes.retain(|(h, _), _| h >= height);
+        self.smvba_votes.retain(|(h, _), _| h >= height);
         self.smvba_no_prevotes.retain(|(h, _), _| h >= height);
         self.aggregator.cleanup_mvba_random(height);
         self.aggregator.cleanup_spb_vote(height);
@@ -305,7 +306,7 @@ impl Core {
             }
 
             if self.pes_path {
-                self.init_smvba_state();
+                self.init_smvba_state(self.height, 1);
                 let round = self.smvba_current_round.get(&self.height).unwrap_or(&1);
                 let proof = SPBProof {
                     height: self.height,
@@ -622,7 +623,7 @@ impl Core {
             return false;
         }
         let cur_round = self.smvba_current_round.entry(height).or_insert(1);
-        if *cur_round != round {
+        if *cur_round > round {
             return false;
         }
         let cur_phase = self.spb_current_phase.get(&(height, round)).unwrap();
@@ -807,9 +808,130 @@ impl Core {
         Ok(())
     }
     async fn handle_smvba_prevote(&mut self, prevote: MPreVote) -> ConsensusResult<()> {
+        debug!("Processing  {:?}", prevote);
+
+        ensure!(
+            self.smvba_msg_filter(prevote.epoch, prevote.height, prevote.round, FIN_PHASE),
+            ConsensusError::TimeOutMessage(prevote.height, prevote.round)
+        );
+
+        prevote.verify(&self.committee, &self.pk_set)?;
+        let y_flag = self
+            .smvba_y_flag
+            .get_mut(&(prevote.height, prevote.round))
+            .unwrap();
+        let n_flag = self
+            .smvba_n_flag
+            .get_mut(&(prevote.height, prevote.round))
+            .unwrap();
+
+        let mut mvote: Option<MVote> = None;
+        match &prevote.tag {
+            PreVoteTag::Yes(value, proof) => {
+                if !(*n_flag) {
+                    *y_flag = true;
+                    if let Some(vote) = self.make_spb_vote(value).await {
+                        mvote = Some(
+                            MVote::new(
+                                self.name,
+                                prevote.leader,
+                                self.signature_service.clone(),
+                                prevote.round,
+                                prevote.height,
+                                prevote.epoch,
+                                MVoteTag::Yes(value.clone(), proof.clone(), vote),
+                            )
+                            .await,
+                        );
+                    }
+                }
+            }
+            PreVoteTag::No() => {
+                if !(*y_flag) {
+                    let weight = self
+                        .smvba_no_prevotes
+                        .entry((prevote.height, prevote.round))
+                        .or_insert(0);
+                    *weight += 1;
+                    if *weight == self.committee.quorum_threshold() {
+                        *n_flag = true;
+                        mvote = Some(
+                            MVote::new(
+                                self.name,
+                                prevote.leader,
+                                self.signature_service.clone(),
+                                prevote.round,
+                                prevote.height,
+                                prevote.epoch,
+                                MVoteTag::No(),
+                            )
+                            .await,
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(vote) = mvote {
+            let message = ConsensusMessage::SMVBAVote(vote.clone());
+            Synchronizer::transmit(
+                message,
+                &self.name,
+                None,
+                &self.network_filter,
+                &self.committee,
+            )
+            .await?;
+            self.handle_smvba_mvote(vote).await?;
+        }
+
         Ok(())
     }
+
     async fn handle_smvba_mvote(&mut self, mvote: MVote) -> ConsensusResult<()> {
+        debug!("Processing  {:?}", mvote);
+
+        ensure!(
+            self.smvba_msg_filter(mvote.epoch, mvote.height, mvote.round, FIN_PHASE),
+            ConsensusError::TimeOutMessage(mvote.height, mvote.round)
+        );
+
+        mvote.verify(&self.committee, &self.pk_set)?;
+        let weight = self
+            .smvba_votes
+            .entry((mvote.height, mvote.round))
+            .or_insert(0);
+        *weight += 1;
+        match mvote.tag {
+            MVoteTag::Yes(value, _, vote) => {
+                if let Some(fin_proof) = self.aggregator.add_spb_vote(vote)? {
+                    let mhalt = MHalt::new(
+                        self.name,
+                        mvote.leader,
+                        value,
+                        fin_proof,
+                        self.signature_service.clone(),
+                    )
+                    .await;
+                    let message = ConsensusMessage::SMVBAHalt(mhalt);
+                    Synchronizer::transmit(
+                        message,
+                        &self.name,
+                        None,
+                        &self.network_filter,
+                        &self.committee,
+                    )
+                    .await?;
+                }
+            }
+            MVoteTag::No() => {
+                if *weight == self.committee.quorum_threshold() {
+                    self.smvba_round_advance(mvote.height, mvote.round + 1)
+                        .await?;
+                }
+            }
+        };
+
         Ok(())
     }
     async fn handle_smvba_rs(&mut self, share: RandomnessShare) -> ConsensusResult<()> {
@@ -854,6 +976,55 @@ impl Core {
                 )
                 .await?;
                 self.handle_smvba_halt(mhalt).await?;
+            } else {
+                let pre_vote: MPreVote;
+
+                //container lock?
+                if self
+                    .spb_locks
+                    .entry((coin.height, coin.round))
+                    .or_insert(HashMap::new())
+                    .contains_key(&leader)
+                {
+                    let (value, proof) = self
+                        .spb_locks
+                        .get(&(coin.height, coin.round))
+                        .unwrap()
+                        .get(&leader)
+                        .unwrap();
+                    pre_vote = MPreVote::new(
+                        self.name,
+                        leader,
+                        self.signature_service.clone(),
+                        coin.round,
+                        coin.height,
+                        coin.epoch,
+                        PreVoteTag::Yes(value.clone(), proof.clone()),
+                    )
+                    .await;
+                } else {
+                    pre_vote = MPreVote::new(
+                        self.name,
+                        leader,
+                        self.signature_service.clone(),
+                        coin.round,
+                        coin.height,
+                        coin.epoch,
+                        PreVoteTag::No(),
+                    )
+                    .await;
+                }
+
+                let message = ConsensusMessage::SMVBAPreVote(pre_vote.clone());
+                Synchronizer::transmit(
+                    message,
+                    &self.name,
+                    None,
+                    &self.network_filter,
+                    &self.committee,
+                )
+                .await?;
+                self.handle_smvba_prevote(pre_vote).await?;
             }
 
             self.leader_elector.add_random_coin(coin);
@@ -862,6 +1033,35 @@ impl Core {
         Ok(())
     }
     async fn handle_smvba_halt(&mut self, halt: MHalt) -> ConsensusResult<()> {
+        debug!("Processing {:?}", halt);
+        ensure!(
+            self.smvba_msg_filter(halt.epoch, halt.height, halt.round, FIN_PHASE),
+            ConsensusError::TimeOutMessage(halt.height, halt.round)
+        );
+        halt.verify(&self.committee, &self.pk_set)?;
+
+        //smvba end -> send pes-prepare
+        self.active_prepare_pahse(halt.height, PES).await?;
+
+        Ok(())
+    }
+
+    async fn smvba_round_advance(
+        &mut self,
+        height: SeqNumber,
+        round: SeqNumber,
+    ) -> ConsensusResult<()> {
+        self.init_smvba_state(height, round);
+        let proof = SPBProof {
+            height: self.height,
+            phase: INIT_PHASE,
+            round,
+            shares: Vec::new(),
+        };
+        let block = self.generate_proposal().await;
+        self.broadcast_pes_propose(block, proof)
+            .await
+            .expect("Failed to send the PES block");
         Ok(())
     }
 
@@ -887,7 +1087,7 @@ impl Core {
         }
         //如果启动了悲观路劲
         if self.pes_path {
-            self.init_smvba_state();
+            self.init_smvba_state(self.height, 1);
             let round = self.smvba_current_round.get(&self.height).unwrap_or(&1);
             let proof = SPBProof {
                 height: self.height,
