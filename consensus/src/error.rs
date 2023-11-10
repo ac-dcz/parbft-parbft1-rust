@@ -45,6 +45,9 @@ pub enum ConsensusError {
     #[error("Invalid threshold signature from {0}")]
     InvalidThresholdSignature(PublicKey),
 
+    #[error("Invalid prepare tag {0}")]
+    InvalidPrePareTag(u8),
+
     #[error("timeout smvba message height {0},round {0}")]
     TimeOutMessage(SeqNumber, SeqNumber),
 
@@ -56,6 +59,12 @@ pub enum ConsensusError {
 
     #[error("Received more than one vote from {0}")]
     AuthorityReuseinQC(PublicKey),
+
+    #[error("Received more than one pre_vote from {0}")]
+    AuthorityReuseinProof(PublicKey),
+
+    #[error("Received more than one aba_val from {0}")]
+    AuthorityReuseinABA(PublicKey),
 
     #[error("Received more than one timeout from {0}")]
     AuthorityReuseinTC(PublicKey),

@@ -17,7 +17,8 @@ pub struct Aggregator {
     committee: Committee,
     hs_votes_aggregators: HashMap<SeqNumber, Box<QCMaker>>,
     spb_votes_aggregators: HashMap<(SeqNumber, SeqNumber, u8), Box<ProofMaker>>,
-    smvba_randomcoin_aggregators: HashMap<(SeqNumber, SeqNumber), Box<RandomCoinMaker>>,
+    smvba_randomcoin_aggregators: HashMap<(SeqNumber, SeqNumber), Box<SMVBARandomCoinMaker>>,
+    aba_randomcoin_aggregators: HashMap<(SeqNumber, SeqNumber), Box<ABARandomCoinMaker>>,
 }
 
 impl Aggregator {
@@ -27,6 +28,7 @@ impl Aggregator {
             hs_votes_aggregators: HashMap::new(),
             spb_votes_aggregators: HashMap::new(),
             smvba_randomcoin_aggregators: HashMap::new(),
+            aba_randomcoin_aggregators: HashMap::new(),
         }
     }
 
@@ -59,7 +61,18 @@ impl Aggregator {
     ) -> ConsensusResult<Option<RandomCoin>> {
         self.smvba_randomcoin_aggregators
             .entry((share.height, share.round))
-            .or_insert_with(|| Box::new(RandomCoinMaker::new()))
+            .or_insert_with(|| Box::new(SMVBARandomCoinMaker::new()))
+            .append(share, &self.committee, pk_set)
+    }
+
+    pub fn add_aba_random(
+        &mut self,
+        share: RandomnessShare,
+        pk_set: &PublicKeySet,
+    ) -> ConsensusResult<Option<usize>> {
+        self.aba_randomcoin_aggregators
+            .entry((share.height, share.round))
+            .or_insert_with(|| Box::new(ABARandomCoinMaker::new()))
             .append(share, &self.committee, pk_set)
     }
 
@@ -147,7 +160,7 @@ impl ProofMaker {
         // Ensure it is the first time this authority votes.
         ensure!(
             self.used.insert(author),
-            ConsensusError::AuthorityReuseinQC(author)
+            ConsensusError::AuthorityReuseinProof(author)
         );
         self.votes.push(vote);
         self.weight += committee.stake(&author);
@@ -164,13 +177,13 @@ impl ProofMaker {
     }
 }
 
-struct RandomCoinMaker {
+struct SMVBARandomCoinMaker {
     weight: Stake,
     shares: Vec<RandomnessShare>,
     used: HashSet<PublicKey>,
 }
 
-impl RandomCoinMaker {
+impl SMVBARandomCoinMaker {
     pub fn new() -> Self {
         Self {
             weight: 0,
@@ -190,11 +203,11 @@ impl RandomCoinMaker {
         // Ensure it is the first time this authority votes.
         ensure!(
             self.used.insert(author),
-            ConsensusError::AuthorityReuseinQC(author)
+            ConsensusError::AuthorityReuseinCoin(author)
         );
         self.shares.push(share.clone());
         self.weight += committee.stake(&author);
-        if self.weight >= committee.quorum_threshold() {
+        if self.weight >= committee.random_coin_threshold() {
             self.weight = 0; // Ensures QC is only made once.
             let mut sigs = BTreeMap::new();
             // Check the random shares.
@@ -223,6 +236,56 @@ impl RandomCoinMaker {
                     shares: self.shares.to_vec(),
                 };
                 return Ok(Some(random_coin));
+            }
+        }
+        Ok(None)
+    }
+}
+
+struct ABARandomCoinMaker {
+    weight: Stake,
+    shares: Vec<RandomnessShare>,
+    used: HashSet<PublicKey>,
+}
+
+impl ABARandomCoinMaker {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            shares: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    /// Try to append a signature to a (partial) quorum.
+    pub fn append(
+        &mut self,
+        share: RandomnessShare,
+        committee: &Committee,
+        pk_set: &PublicKeySet,
+    ) -> ConsensusResult<Option<usize>> {
+        let author = share.author;
+        // Ensure it is the first time this authority votes.
+        ensure!(
+            self.used.insert(author),
+            ConsensusError::AuthorityReuseinCoin(author)
+        );
+        self.shares.push(share.clone());
+        self.weight += committee.stake(&author);
+        if self.weight >= committee.random_coin_threshold() {
+            self.weight = 0; // Ensures QC is only made once.
+            let mut sigs = BTreeMap::new();
+            // Check the random shares.
+            for share in self.shares.clone() {
+                sigs.insert(
+                    committee.id(share.author.clone()),
+                    share.signature_share.clone(),
+                );
+            }
+            if let Ok(sig) = pk_set.combine_signatures(sigs.iter()) {
+                let id = usize::from_be_bytes((&sig.to_bytes()[0..8]).try_into().unwrap()) % 2;
+
+                return Ok(Some(id));
             }
         }
         Ok(None)

@@ -69,7 +69,7 @@ impl Synchronizer {
                             debug!("consensus sync loopback");
                             let _ = pending.remove(&block.digest());
                             let _ = requests.remove(&block.parent());
-                            let message = ConsensusMessage::LoopBack(block);
+                            let message = ConsensusMessage::HsLoopBack(block);
                             if let Err(e) = core_channel.send(message).await {
                                 panic!("Failed to send message through core channel: {}", e);
                             }

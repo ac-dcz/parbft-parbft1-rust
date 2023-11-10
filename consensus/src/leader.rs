@@ -31,10 +31,10 @@ impl RandomLeaderElector {
             .insert((random_coin.height, random_coin.round), random_coin);
     }
 
-    pub fn get_coin_leader(&self, height: SeqNumber, round: SeqNumber) -> Option<PublicKey> {
-        if !self.random_coins.contains_key(&(height, round)) {
-            return None;
-        }
-        Some(self.random_coins.get(&(height, round)).unwrap().leader)
-    }
+    // pub fn get_coin_leader(&self, height: SeqNumber, round: SeqNumber) -> Option<PublicKey> {
+    //     if !self.random_coins.contains_key(&(height, round)) {
+    //         return None;
+    //     }
+    //     Some(self.random_coins.get(&(height, round)).unwrap().leader)
+    // }
 }

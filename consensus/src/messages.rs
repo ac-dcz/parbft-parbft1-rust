@@ -1,5 +1,5 @@
 use crate::config::Committee;
-use crate::core::{SeqNumber, FIN_PHASE, INIT_PHASE, LOCK_PHASE};
+use crate::core::{SeqNumber, FIN_PHASE, INIT_PHASE, LOCK_PHASE, OPT, PES};
 use crate::error::{ConsensusError, ConsensusResult};
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
@@ -7,7 +7,7 @@ use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
-use std::fmt;
+use std::fmt::{self, Debug};
 use threshold_crypto::{PublicKeySet, SignatureShare};
 
 #[cfg(test)]
@@ -782,10 +782,143 @@ impl fmt::Debug for MHalt {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct ABAVal {}
+pub enum PrePareProof {
+    OPT(QC),
+    PES(SPBProof),
+}
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct ABAMux {}
+impl PrePareProof {
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+        match self {
+            Self::OPT(qc) => qc.verify(committee),
+            Self::PES(proof) => {
+                ensure!(proof.phase == FIN_PHASE, ConsensusError::InvalidFinProof());
+                proof.verify(committee, pk_set)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PrePare {
+    pub author: PublicKey,
+    pub epoch: SeqNumber,
+    pub height: SeqNumber,
+    pub tag: u8,
+    pub block: Block,
+    pub proof: PrePareProof,
+    pub signature: Signature,
+}
+
+impl PrePare {
+    pub async fn new(
+        author: PublicKey,
+        block: Block,
+        proof: PrePareProof,
+        tag: u8,
+        mut signature_service: SignatureService,
+    ) -> Self {
+        let mut prepare = Self {
+            author,
+            epoch: block.epoch,
+            height: block.height,
+            tag,
+            block,
+            proof,
+            signature: Signature::default(),
+        };
+        prepare.signature = signature_service.request_signature(prepare.digest()).await;
+        return prepare;
+    }
+    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+        self.signature.verify(&self.digest(), &self.author)?;
+
+        self.proof.verify(committee, pk_set)
+    }
+}
+
+impl Hash for PrePare {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.author.0);
+        hasher.update(self.height.to_le_bytes());
+        hasher.update(self.epoch.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for PrePare {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut tag = String::from("Unkonw");
+        if self.tag == OPT {
+            tag = "OPT".to_string();
+        } else if self.tag == PES {
+            tag = "PES".to_string();
+        }
+        write!(f, "PrePare(tag {}, block {})", tag, self.block)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ABAVal {
+    pub author: PublicKey,
+    pub epoch: SeqNumber,
+    pub height: SeqNumber,
+    pub round: SeqNumber,
+    pub phase: u8,
+    pub val: usize,
+    pub signature: Signature,
+}
+
+impl ABAVal {
+    pub async fn new(
+        author: PublicKey,
+        epoch: SeqNumber,
+        height: SeqNumber,
+        round: SeqNumber,
+        val: usize,
+        phase: u8,
+        mut signature_service: SignatureService,
+    ) -> Self {
+        let mut aba_val = Self {
+            author,
+            epoch,
+            height,
+            round,
+            val,
+            phase,
+            signature: Signature::default(),
+        };
+        aba_val.signature = signature_service.request_signature(aba_val.digest()).await;
+        return aba_val;
+    }
+
+    pub fn verify(&self) -> ConsensusResult<()> {
+        self.signature.verify(&self.digest(), &self.author)?;
+        Ok(())
+    }
+}
+
+impl Hash for ABAVal {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.author.0);
+        hasher.update(self.height.to_le_bytes());
+        hasher.update(self.epoch.to_le_bytes());
+        hasher.update(self.round.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for ABAVal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ABAVal(round {},phase {},val {})",
+            self.round, self.phase, self.val
+        )
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct QC {
