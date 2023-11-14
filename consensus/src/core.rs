@@ -5,8 +5,8 @@ use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 use crate::messages::{
-    ABAVal, Block, HVote, MDone, MHalt, MPreVote, MVote, MVoteTag, PrePare, PrePareProof,
-    PreVoteTag, RandomnessShare, SPBProof, SPBValue, SPBVote, QC,
+    ABAOutput, ABAVal, Block, HVote, MDone, MHalt, MPreVote, MVote, MVoteTag, PrePare,
+    PrePareProof, PreVoteTag, RandomnessShare, SPBProof, SPBValue, SPBVote, QC,
 };
 use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
@@ -40,7 +40,6 @@ pub const FIN_PHASE: u8 = 2;
 pub enum ConsensusMessage {
     HsPropose(Block),
     HSVote(HVote),
-    ABACoinShare(RandomnessShare),
     HsLoopBack(Block),
     SyncRequest(Digest, PublicKey),
     SyncReply(Block),
@@ -54,6 +53,9 @@ pub enum ConsensusMessage {
     SMVBAHalt(MHalt),                //mvba halt
     ParPrePare(PrePare),
     ParABAVal(ABAVal),
+    ParABACoinShare(RandomnessShare),
+    ParABAOutput(ABAOutput),
+    ParLoopBack(Block),
 }
 
 pub struct Core {
@@ -67,12 +69,14 @@ pub struct Core {
     mempool_driver: MempoolDriver,
     synchronizer: Synchronizer,
     core_channel: Receiver<ConsensusMessage>,
+    tx_core: Sender<ConsensusMessage>,
     network_filter: Sender<FilterInput>,
     commit_channel: Sender<Block>,
     height: SeqNumber, // current height
     epoch: SeqNumber,  // current epoch
     last_voted_height: SeqNumber,
     last_committed_height: SeqNumber,
+    unhandle_message: VecDeque<(SeqNumber, ConsensusMessage)>,
     high_qc: QC,
     aggregator: Aggregator,
     opt_path: bool,
@@ -90,15 +94,17 @@ pub struct Core {
     smvba_votes: HashMap<(SeqNumber, SeqNumber), HashSet<PublicKey>>,
     smvba_no_prevotes: HashMap<(SeqNumber, SeqNumber), HashSet<PublicKey>>,
     prepare_tag: HashSet<SeqNumber>, //标记 height高度的 tag是否已经发送
-    par_prepare_opts: HashMap<SeqNumber, Stake>,
-    par_prepare_pess: HashMap<SeqNumber, Stake>,
+    par_prepare_opts: HashMap<SeqNumber, HashSet<PublicKey>>,
+    par_prepare_pess: HashMap<SeqNumber, HashSet<PublicKey>>,
     par_values: HashMap<SeqNumber, [Option<Block>; 2]>,
     aba_vals_used: HashMap<(SeqNumber, SeqNumber, u8), HashSet<PublicKey>>,
     aba_temp_vals: HashMap<(SeqNumber, SeqNumber, u8), [Stake; 2]>,
     aba_bin_vals: HashMap<(SeqNumber, SeqNumber), [bool; 2]>,
     aba_mux_vals: HashMap<(SeqNumber, SeqNumber), [bool; 2]>,
     aba_current_round: HashMap<SeqNumber, SeqNumber>,
-    aba_output: HashMap<SeqNumber, Option<u8>>,
+    aba_output: HashMap<SeqNumber, Option<usize>>,
+    aba_output_messages: HashMap<SeqNumber, HashSet<PublicKey>>,
+    par_value_wait: HashMap<SeqNumber, [bool; 2]>,
 }
 
 impl Core {
@@ -114,6 +120,7 @@ impl Core {
         mempool_driver: MempoolDriver,
         synchronizer: Synchronizer,
         core_channel: Receiver<ConsensusMessage>,
+        tx_core: Sender<ConsensusMessage>,
         network_filter: Sender<FilterInput>,
         commit_channel: Sender<Block>,
         opt_path: bool,
@@ -133,10 +140,12 @@ impl Core {
             network_filter,
             commit_channel,
             core_channel,
+            tx_core,
             height: 1,
             epoch: 0,
             last_voted_height: 0,
             last_committed_height: 0,
+            unhandle_message: VecDeque::new(),
             high_qc: QC::genesis(),
             aggregator,
             opt_path,
@@ -163,10 +172,12 @@ impl Core {
             aba_output: HashMap::new(),
             aba_bin_vals: HashMap::new(),
             aba_mux_vals: HashMap::new(),
+            aba_output_messages: HashMap::new(),
+            par_value_wait: HashMap::new(),
         }
     }
 
-    //初试化一个 epoch
+    //initlization epoch
     fn epoch_init(&mut self, epoch: u64) {
         //清除之前的消息
         self.aggregator = Aggregator::new(self.committee.clone());
@@ -196,6 +207,8 @@ impl Core {
         self.aba_output = HashMap::new();
         self.aba_bin_vals = HashMap::new();
         self.aba_mux_vals = HashMap::new();
+        self.aba_output_messages = HashMap::new();
+        self.par_value_wait = HashMap::new();
         self.update_smvba_state(1, 1);
         self.update_hs_state(1);
     }
@@ -214,24 +227,40 @@ impl Core {
     }
 
     fn update_hs_state(&mut self, height: SeqNumber) {
-        self.par_prepare_opts.insert(height, 0);
-        self.par_prepare_pess.insert(height, 0);
+        self.par_prepare_opts.insert(height, HashSet::new());
+        self.par_prepare_pess.insert(height, HashSet::new());
         self.aba_current_round.insert(height, 1);
         self.aba_output.insert(height, None);
         self.aba_bin_vals.insert((height, 1), [false, false]);
         self.aba_mux_vals.insert((height, 1), [false, false]);
+        self.aba_current_round.insert(height, 1);
+        self.aba_output.insert(height, None);
+        self.aba_output_messages.insert(height, HashSet::new());
+        self.par_value_wait.insert(height, [false, false]);
     }
 
     fn clean_smvba_state(&mut self, height: &SeqNumber) {
-        self.smvba_current_round.retain(|h, _| h >= height);
-        self.spb_proposes.retain(|(h, _), _| h >= height);
-        self.spb_finishs.retain(|(h, _), _| h >= height);
-        self.spb_locks.retain(|(h, _), _| h >= height);
+        self.smvba_current_round.retain(|h, _| h > height);
+        self.spb_proposes.retain(|(h, _), _| h > height);
+        self.spb_finishs.retain(|(h, _), _| h > height);
+        self.spb_locks.retain(|(h, _), _| h > height);
         // self.smvba_yes_votes.retain(|(h, _), _| h >= height);
-        self.smvba_votes.retain(|(h, _), _| h >= height);
-        self.smvba_no_prevotes.retain(|(h, _), _| h >= height);
+        self.smvba_votes.retain(|(h, _), _| h > height);
+        self.smvba_no_prevotes.retain(|(h, _), _| h > height);
         self.aggregator.cleanup_mvba_random(height);
         self.aggregator.cleanup_spb_vote(height);
+
+        //
+        self.par_prepare_opts.retain(|h, _| h > height);
+        self.par_prepare_pess.retain(|h, _| h > height);
+        self.aba_current_round.retain(|h, _| h > height);
+        self.aba_output.retain(|h, _| h > height);
+        self.aba_bin_vals.retain(|(h, _), _| h > height);
+        self.aba_mux_vals.retain(|(h, _), _| h > height);
+        self.aba_current_round.retain(|h, _| h > height);
+        self.aba_output.retain(|h, _| h > height);
+        self.aba_output_messages.retain(|h, _| h > height);
+        self.par_value_wait.retain(|h, _| h > height);
     }
 
     async fn store_block(&mut self, block: &Block) {
@@ -368,12 +397,13 @@ impl Core {
         if height < self.height {
             return;
         }
+
+        self.aggregator.cleanup_hs_vote(&self.height);
         // Reset the timer and advance round.
         self.height = height + 1;
         debug!("Moved to round {}", self.height);
         self.update_hs_state(self.height);
         // Cleanup the vote aggregator.
-        self.aggregator.cleanup_hs_vote(&self.height);
     }
     // -- End Pacemaker --
 
@@ -587,8 +617,12 @@ impl Core {
 
     async fn handle_hs_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
         let digest = block.digest();
-        if block.epoch != self.epoch {
+        if block.epoch < self.epoch {
             return Ok(());
+        } else if block.epoch > self.epoch {
+            self.unhandle_message
+                .push_back((block.epoch, ConsensusMessage::HsPropose(block.clone())));
+            return Err(ConsensusError::EpochEnd(self.epoch));
         }
         // Ensure the block proposer is the right leader for the round.
         ensure!(
@@ -608,7 +642,7 @@ impl Core {
 
         // Let's see if we have the block's data. If we don't, the mempool
         // will get it and then make us resume processing this block.
-        if !self.mempool_driver.verify(block.clone()).await? {
+        if !self.mempool_driver.verify(block.clone(), OPT).await? {
             debug!("Processing of {} suspended: missing payload", digest);
             return Ok(());
         }
@@ -682,10 +716,10 @@ impl Core {
         round: SeqNumber,
         phase: u8,
     ) -> bool {
-        if self.epoch != epoch {
+        if self.epoch > epoch {
             return false;
         }
-        if self.height != height && self.height != height + 1 {
+        if self.height >= height + 2 {
             return false;
         }
         let cur_round = self.smvba_current_round.entry(height).or_insert(1);
@@ -710,6 +744,14 @@ impl Core {
             self.smvba_msg_filter(value.block.epoch, proof.height, proof.round, proof.phase),
             ConsensusError::TimeOutMessage(proof.height, proof.round)
         );
+
+        if value.block.epoch > self.epoch {
+            self.unhandle_message.push_back((
+                value.block.epoch,
+                ConsensusMessage::SPBPropose(value, proof),
+            ));
+            return Err(ConsensusError::EpochEnd(self.epoch));
+        }
 
         //验证Proof是否正确
         value.verify(&self.committee, &proof, &self.pk_set)?;
@@ -1024,6 +1066,8 @@ impl Core {
         );
         share.verify(&self.committee, &self.pk_set)?;
         if let Some(coin) = self.aggregator.add_smvba_random(share, &self.pk_set)? {
+            self.leader_elector.add_random_coin(coin.clone());
+
             let leader = coin.leader;
 
             // container finish?
@@ -1104,8 +1148,6 @@ impl Core {
                 .await?;
                 self.handle_smvba_prevote(pre_vote).await?;
             }
-
-            self.leader_elector.add_random_coin(coin);
         }
 
         Ok(())
@@ -1117,6 +1159,12 @@ impl Core {
             self.smvba_msg_filter(halt.epoch, halt.height, halt.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(halt.height, halt.round)
         );
+        if self.leader_elector.get_coin_leader(halt.height, halt.round)
+            != Some(halt.value.block.author)
+        // leader 是否与 finish value的proposer 相符
+        {
+            return Ok(());
+        }
         halt.verify(&self.committee, &self.pk_set)?;
 
         //smvba end -> send pes-prepare
@@ -1131,44 +1179,70 @@ impl Core {
         Ok(())
     }
 
+    async fn smvba_round_advance(
+        &mut self,
+        height: SeqNumber,
+        round: SeqNumber,
+    ) -> ConsensusResult<()> {
+        self.update_smvba_state(height, round);
+        let proof = SPBProof {
+            height: self.height,
+            phase: INIT_PHASE,
+            round,
+            shares: Vec::new(),
+        };
+        let block = self.generate_proposal().await;
+        self.broadcast_pes_propose(block, proof)
+            .await
+            .expect("Failed to send the PES block");
+        Ok(())
+    }
+
     async fn handle_par_prepare(&mut self, prepare: PrePare) -> ConsensusResult<()> {
         debug!("Processing {:?}", prepare);
         //不是一个epoch 或者 已经对aba 投过票
-        if prepare.epoch != self.epoch || prepare.height + 2 < self.height {
+        if prepare.epoch != self.epoch || prepare.height + 2 <= self.height {
             return Ok(());
         }
 
-        let opt_nums = self.par_prepare_opts.entry(prepare.height).or_insert(0);
-        let pes_nums = self.par_prepare_pess.entry(prepare.height).or_insert(0);
+        let opt_set = self
+            .par_prepare_opts
+            .entry(prepare.height)
+            .or_insert(HashSet::new());
+        let pes_set = self
+            .par_prepare_pess
+            .entry(prepare.height)
+            .or_insert(HashSet::new());
 
-        if (*opt_nums) + (*pes_nums) >= self.committee.quorum_threshold() {
-            //保证每个节点只对aba进行一次投票
-            return Ok(());
-        }
+        ensure!(
+            !opt_set.contains(&prepare.author) && !pes_set.contains(&prepare.author),
+            ConsensusError::AuthorityReuseinPrePare(prepare.author)
+        );
+
         let vals = self
             .par_values
             .entry(prepare.height)
             .or_insert([None, None]);
+
+        let val = prepare.tag as usize;
+        let height = prepare.height;
 
         if vals[prepare.tag as usize].is_none() {
             vals[prepare.tag as usize] = Some(prepare.block)
         }
 
         match prepare.tag {
-            OPT => {
-                *opt_nums += 1;
-            }
-            PES => {
-                *pes_nums += 1;
-            }
+            OPT => opt_set.insert(prepare.author),
+            PES => pes_set.insert(prepare.author),
             _ => return Err(ConsensusError::InvalidPrePareTag(prepare.tag)),
         };
-
+        let opt_nums = opt_set.len() as Stake;
+        let pes_nums = pes_set.len() as Stake;
         let mut aba_val: Option<ABAVal> = None;
-        if (*opt_nums) + (*pes_nums) == self.committee.quorum_threshold() {
-            if *opt_nums == self.committee.quorum_threshold() {
+        if opt_nums + pes_nums == self.committee.quorum_threshold() {
+            if opt_nums == self.committee.quorum_threshold() {
                 // 啥事不干 已经保证了至少有f+1诚实节点已经收到了h-1高度的propose
-            } else if *opt_nums > 0 {
+            } else if opt_nums > 0 {
                 aba_val = Some(
                     ABAVal::new(
                         self.name,
@@ -1211,23 +1285,38 @@ impl Core {
             self.handle_aba_val(val).await?;
         }
 
+        //wait value?
+        let wait = self.par_value_wait.entry(height).or_insert([false, false]);
+        if wait[val] {
+            wait[val] = false;
+            self.handle_par_out(height, val).await?;
+        }
+
         Ok(())
+    }
+
+    fn aba_message_filter(
+        &mut self,
+        epoch: SeqNumber,
+        height: SeqNumber,
+        round: SeqNumber,
+        phase: u8,
+    ) -> bool {
+        if epoch != self.epoch || height + 2 <= self.height || phase > MUX_PHASE {
+            return false;
+        }
+        let cur_round = self.aba_current_round.entry(height).or_insert(1);
+        if *cur_round > round {
+            return false;
+        }
+        true
     }
 
     #[async_recursion]
     async fn handle_aba_val(&mut self, aba_val: ABAVal) -> ConsensusResult<()> {
         debug!("Processing {:?}", aba_val);
         aba_val.verify()?;
-        //TODO
-        if aba_val.epoch != self.epoch
-            || aba_val.height + 2 < self.height
-            || aba_val.phase > MUX_PHASE
-        {
-            return Ok(());
-        }
-
-        let cur_round = self.aba_current_round.entry(aba_val.height).or_insert(1);
-        if *cur_round > aba_val.round {
+        if !self.aba_message_filter(aba_val.epoch, aba_val.height, aba_val.round, aba_val.phase) {
             return Ok(());
         }
 
@@ -1235,18 +1324,21 @@ impl Core {
             .aba_vals_used
             .entry((aba_val.height, aba_val.round, aba_val.phase))
             .or_insert(HashSet::new());
+
         ensure!(
             used.insert(aba_val.author),
             ConsensusError::AuthorityReuseinABA(aba_val.author)
         );
+
         let temp_vals = self
             .aba_temp_vals
             .entry((aba_val.height, aba_val.round, aba_val.phase))
             .or_insert([0, 0]);
 
         temp_vals[aba_val.val] += 1;
+
         if aba_val.phase == VAL_PHASE {
-            if temp_vals[aba_val.val] == self.committee.random_coin_threshold()
+            if temp_vals[aba_val.val] == self.committee.random_coin_threshold() //f+1
                 && !used.contains(&self.name)
             {
                 let val_t = ABAVal::new(
@@ -1259,7 +1351,7 @@ impl Core {
                     self.signature_service.clone(),
                 )
                 .await;
-                let message = ConsensusMessage::ParABAVal(val_t.clone());
+                let message = ConsensusMessage::ParABAVal(val_t);
                 Synchronizer::transmit(
                     message,
                     &self.name,
@@ -1271,7 +1363,9 @@ impl Core {
                 used.insert(self.name);
                 temp_vals[aba_val.val] += 1;
             }
+
             if temp_vals[aba_val.val] == self.committee.quorum_threshold() {
+                //2f+1
                 self.aba_bin_vals
                     .entry((aba_val.height, aba_val.round))
                     .or_insert([false, false])[aba_val.val] = true;
@@ -1301,27 +1395,28 @@ impl Core {
                 .aba_bin_vals
                 .entry((aba_val.height, aba_val.round))
                 .or_insert([false, false]);
+
+            let mux_vals = self
+                .aba_mux_vals
+                .entry((aba_val.height, aba_val.round))
+                .or_insert([false, false]);
+
             let mut flag = false;
-            if temp_vals[0] == self.committee.quorum_threshold() && bin_vals[0] {
-                self.aba_mux_vals
-                    .entry((aba_val.height, aba_val.round))
-                    .or_insert([false, false])[0] = true;
-                flag = true;
-            } else if temp_vals[1] == self.committee.quorum_threshold() && bin_vals[1] {
-                self.aba_mux_vals
-                    .entry((aba_val.height, aba_val.round))
-                    .or_insert([false, false])[0] = true;
-                flag = true;
-            } else if temp_vals[1] + temp_vals[0] == self.committee.quorum_threshold()
-                && bin_vals[0] & bin_vals[1]
-            {
-                let mux_vals = self
-                    .aba_mux_vals
-                    .entry((aba_val.height, aba_val.round))
-                    .or_insert([false, false]);
-                *mux_vals = [true, true];
-                flag = true;
+
+            if !(mux_vals[0] | mux_vals[1]) {
+                let weight = self.committee.quorum_threshold();
+                if temp_vals[0] >= weight && bin_vals[0] {
+                    mux_vals[0] = true;
+                    flag = true;
+                } else if temp_vals[1] >= weight && bin_vals[1] {
+                    mux_vals[1] = true;
+                    flag = true;
+                } else if temp_vals[1] + temp_vals[0] >= weight && bin_vals[0] & bin_vals[1] {
+                    *mux_vals = [true, true];
+                    flag = true;
+                }
             }
+
             if flag {
                 let share = RandomnessShare::new(
                     aba_val.height,
@@ -1331,7 +1426,9 @@ impl Core {
                     self.signature_service.clone(),
                 )
                 .await;
-                let message = ConsensusMessage::ABACoinShare(share.clone());
+
+                let message = ConsensusMessage::ParABACoinShare(share.clone());
+
                 Synchronizer::transmit(
                     message,
                     &self.name,
@@ -1340,6 +1437,7 @@ impl Core {
                     &self.committee,
                 )
                 .await?;
+
                 self.handle_aba_rs(share).await?;
             }
         }
@@ -1348,38 +1446,190 @@ impl Core {
     }
 
     async fn handle_aba_rs(&mut self, share: RandomnessShare) -> ConsensusResult<()> {
-        debug!("aba coin share {:?}", share);
-        if share.epoch != self.epoch || share.height + 2 < self.height {
-            return Ok(());
-        }
-        let cur_round = self.aba_current_round.entry(share.height).or_insert(1);
-        if *cur_round > share.round {
+        debug!("Processing aba coin share {:?}", share);
+
+        share.verify(&self.committee, &self.pk_set)?;
+
+        if !self.aba_message_filter(share.epoch, share.height, share.round, MUX_PHASE) {
             return Ok(());
         }
 
-        if let Some(_) = self.aggregator.add_aba_random(share, &self.pk_set)? {
-            // if
+        let height = share.height;
+        let round = share.round;
+
+        let mux_vals = self
+            .aba_mux_vals
+            .entry((share.height, share.round))
+            .or_insert([false, false]);
+        if let Some(coin) = self.aggregator.add_aba_random(share, &self.pk_set)? {
+            let mut val = coin;
+            if mux_vals[0] ^ mux_vals[1] {
+                if mux_vals[coin] {
+                    self.aba_output.entry(self.height).or_insert(Some(coin));
+                    //TODO broadcast aba exit message
+                    let aba_out = ABAOutput::new(
+                        self.name,
+                        self.epoch,
+                        height,
+                        round,
+                        coin,
+                        self.signature_service.clone(),
+                    )
+                    .await;
+
+                    let message = ConsensusMessage::ParABAOutput(aba_out.clone());
+                    Synchronizer::transmit(
+                        message,
+                        &self.name,
+                        None,
+                        &self.network_filter,
+                        &self.committee,
+                    )
+                    .await?;
+
+                    return self.handle_aba_output(aba_out).await;
+                } else {
+                    val = coin ^ 1;
+                }
+            }
+            // into next round
+            let aba_val = ABAVal::new(
+                self.name,
+                self.epoch,
+                height,
+                round + 1,
+                val,
+                VAL_PHASE,
+                self.signature_service.clone(),
+            )
+            .await;
+            let message = ConsensusMessage::ParABAVal(aba_val.clone());
+
+            Synchronizer::transmit(
+                message,
+                &self.name,
+                None,
+                &self.network_filter,
+                &self.committee,
+            )
+            .await?;
+
+            self.handle_aba_val(aba_val).await?;
         }
 
         Ok(())
     }
 
-    async fn smvba_round_advance(
-        &mut self,
-        height: SeqNumber,
-        round: SeqNumber,
-    ) -> ConsensusResult<()> {
-        self.update_smvba_state(height, round);
-        let proof = SPBProof {
-            height: self.height,
-            phase: INIT_PHASE,
-            round,
-            shares: Vec::new(),
-        };
-        let block = self.generate_proposal().await;
-        self.broadcast_pes_propose(block, proof)
-            .await
-            .expect("Failed to send the PES block");
+    async fn handle_aba_output(&mut self, aba_out: ABAOutput) -> ConsensusResult<()> {
+        debug!("Processing {:?}", aba_out);
+
+        aba_out.verify()?;
+
+        if !self.aba_message_filter(aba_out.epoch, aba_out.height, aba_out.round, MUX_PHASE) {
+            return Ok(());
+        }
+
+        let height = aba_out.height;
+        let round = aba_out.round;
+
+        if let Some(val) = self.aba_output.get(&height).unwrap_or(&None) {
+            if *val != aba_out.val {
+                return Ok(());
+            }
+        }
+
+        let out_set = self
+            .aba_output_messages
+            .entry(height)
+            .or_insert(HashSet::new());
+
+        ensure!(
+            out_set.insert(aba_out.author),
+            ConsensusError::AuthorityReuseinABA(aba_out.author)
+        );
+
+        let mut nums = out_set.len() as Stake;
+
+        if nums == self.committee.random_coin_threshold() && !out_set.contains(&self.name) {
+            //f+1
+            let out = ABAOutput::new(
+                self.name,
+                self.epoch,
+                height,
+                round,
+                aba_out.val,
+                self.signature_service.clone(),
+            )
+            .await;
+
+            let message = ConsensusMessage::ParABAOutput(out);
+            Synchronizer::transmit(
+                message,
+                &self.name,
+                None,
+                &self.network_filter,
+                &self.committee,
+            )
+            .await?;
+
+            out_set.insert(self.name);
+            nums += 1;
+        }
+
+        if nums == self.committee.quorum_threshold() {
+            self.handle_par_out(height, aba_out.val).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_par_out(&mut self, height: SeqNumber, val: usize) -> ConsensusResult<()> {
+        //TODO deal
+        if height < self.last_committed_height {
+            return Ok(());
+        }
+
+        let values = self.par_values.entry(height).or_insert([None, None]);
+
+        if values[val].is_some() {
+            //提交
+            let block = values[val].clone().unwrap();
+
+            // Process the QC. This may allow us to advance round.
+            self.process_qc(&block.qc).await;
+
+            // Let's see if we have the block's data. If we don't, the mempool
+            // will get it and then make us resume processing this block.
+            if !self.mempool_driver.verify(block.clone(), PES).await? {
+                debug!(
+                    "Processing of {} suspended: missing payload",
+                    block.digest()
+                );
+                return Ok(());
+            }
+
+            self.process_par_out(&block).await?;
+        } else {
+            self.par_value_wait.entry(height).or_insert([false, false])[val] = true;
+        }
+
+        //如果是悲观路径输出
+        if val == 1 {
+            //epoch init
+            return Err(ConsensusError::EpochEnd(self.epoch));
+        }
+
+        Ok(())
+    }
+
+    async fn process_par_out(&mut self, block: &Block) -> ConsensusResult<()> {
+        // Store the block only if we have already processed all its ancestors.
+        self.store_block(block).await;
+
+        // Cleanup the mempool.
+        self.mempool_driver.cleanup_par(block).await;
+
+        self.commit(block.clone()).await?;
         Ok(())
     }
 
@@ -1389,6 +1639,16 @@ impl Core {
             self.run().await; //运行当前epoch
             epoch += 1;
             self.epoch_init(epoch);
+
+            while !self.unhandle_message.is_empty() {
+                if let Some((e, msg)) = self.unhandle_message.pop_front() {
+                    if e == self.epoch {
+                        if let Err(e) = self.tx_core.send(msg).await {
+                            panic!("Failed to send block through network channel: {}", e);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1425,7 +1685,7 @@ impl Core {
                     match message {
                         ConsensusMessage::HsPropose(block) => self.handle_hs_proposal(&block).await,
                         ConsensusMessage::HSVote(vote) => self.handle_hs_vote(&vote).await,
-                        ConsensusMessage::ABACoinShare(rs) => self.handle_aba_rs(rs).await,
+                        ConsensusMessage::ParABACoinShare(rs) => self.handle_aba_rs(rs).await,
                         ConsensusMessage::HsLoopBack(block) => self.process_opt_block(&block).await,
                         ConsensusMessage::SyncRequest(digest, sender) => self.handle_sync_request(digest, sender).await,
                         ConsensusMessage::SyncReply(block) => self.handle_hs_proposal(&block).await,
@@ -1439,6 +1699,8 @@ impl Core {
                         ConsensusMessage::SMVBAHalt(halt) => self.handle_smvba_halt(halt).await,
                         ConsensusMessage::ParPrePare(prepare) => self.handle_par_prepare(prepare).await,
                         ConsensusMessage::ParABAVal(aba_val) => self.handle_aba_val(aba_val).await,
+                        ConsensusMessage::ParABAOutput(aba_out) => self.handle_aba_output(aba_out).await,
+                        ConsensusMessage::ParLoopBack(block) => self.process_par_out(&block).await,
                     }
                 },
                 else => break,
@@ -1446,7 +1708,10 @@ impl Core {
             match result {
                 Ok(()) => (),
                 Err(ConsensusError::SerializationError(e)) => error!("Store corrupted. {}", e),
-                Err(ConsensusError::PESOutput) => return, //ABA输出1 直接退出当前epoch
+                Err(ConsensusError::EpochEnd(e)) => {
+                    debug!("epoch {e} end");
+                    return; //ABA输出1 直接退出当前epoch
+                }
                 Err(e) => warn!("{}", e),
             }
         }

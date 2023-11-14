@@ -78,17 +78,17 @@ impl Aggregator {
 
     // used in HotStuff
     pub fn cleanup_hs_vote(&mut self, height: &SeqNumber) {
-        self.hs_votes_aggregators.retain(|k, _| k >= height);
+        self.hs_votes_aggregators.retain(|k, _| k > height);
     }
 
     pub fn cleanup_spb_vote(&mut self, height: &SeqNumber) {
         self.spb_votes_aggregators
-            .retain(|(h, _, ..), _| h >= height);
+            .retain(|(h, _, ..), _| h > height);
     }
 
     pub fn cleanup_mvba_random(&mut self, height: &SeqNumber) {
         self.smvba_randomcoin_aggregators
-            .retain(|(h, _), _| h >= height);
+            .retain(|(h, _), _| h > height);
     }
 }
 

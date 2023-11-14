@@ -5,7 +5,7 @@ use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
 use threshold_crypto::{PublicKeySet, SignatureShare};
@@ -920,6 +920,64 @@ impl fmt::Debug for ABAVal {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ABAOutput {
+    pub author: PublicKey,
+    pub epoch: SeqNumber,
+    pub height: SeqNumber,
+    pub round: SeqNumber,
+    pub val: usize,
+    pub signature: Signature,
+}
+
+impl ABAOutput {
+    pub async fn new(
+        author: PublicKey,
+        epoch: SeqNumber,
+        height: SeqNumber,
+        round: SeqNumber,
+        val: usize,
+        mut signature_service: SignatureService,
+    ) -> Self {
+        let mut out = Self {
+            author,
+            epoch,
+            height,
+            round,
+            val,
+            signature: Signature::default(),
+        };
+        out.signature = signature_service.request_signature(out.digest()).await;
+        return out;
+    }
+
+    pub fn verify(&self) -> ConsensusResult<()> {
+        self.signature.verify(&self.digest(), &self.author)?;
+        Ok(())
+    }
+}
+
+impl Hash for ABAOutput {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.author.0);
+        hasher.update(self.epoch.to_le_bytes());
+        hasher.update(self.height.to_le_bytes());
+        hasher.update(self.round.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for ABAOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ABAOutput(author {},height {},round {},val {})",
+            self.author, self.height, self.round, self.val
+        )
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct QC {
     pub hash: Digest,
@@ -1078,48 +1136,48 @@ pub struct RandomCoin {
 }
 
 impl RandomCoin {
-    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
-        // Ensure the QC has a quorum.
-        let mut weight = 0;
-        let mut used = HashSet::new();
-        for share in self.shares.iter() {
-            let name = share.author;
-            ensure!(
-                !used.contains(&name),
-                ConsensusError::AuthorityReuseinCoin(name)
-            );
-            let voting_rights = committee.stake(&name);
-            ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(name));
-            used.insert(name);
-            weight += voting_rights;
-        }
-        ensure!(
-            weight >= committee.random_coin_threshold(), //f+1
-            ConsensusError::RandomCoinRequiresQuorum
-        );
+    // pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+    //     // Ensure the QC has a quorum.
+    //     let mut weight = 0;
+    //     let mut used = HashSet::new();
+    //     for share in self.shares.iter() {
+    //         let name = share.author;
+    //         ensure!(
+    //             !used.contains(&name),
+    //             ConsensusError::AuthorityReuseinCoin(name)
+    //         );
+    //         let voting_rights = committee.stake(&name);
+    //         ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(name));
+    //         used.insert(name);
+    //         weight += voting_rights;
+    //     }
+    //     ensure!(
+    //         weight >= committee.random_coin_threshold(), //f+1
+    //         ConsensusError::RandomCoinRequiresQuorum
+    //     );
 
-        let mut sigs = BTreeMap::new(); //构建BTree选择leader
-                                        // Check the random shares.
-        for share in &self.shares {
-            share.verify(committee, pk_set)?;
-            sigs.insert(committee.id(share.author), share.signature_share.clone());
-        }
-        if let Ok(sig) = pk_set.combine_signatures(sigs.iter()) {
-            let id = usize::from_be_bytes((&sig.to_bytes()[0..8]).try_into().unwrap())
-                % committee.size();
-            let mut keys: Vec<_> = committee.authorities.keys().cloned().collect();
-            keys.sort();
-            let leader = keys[id];
-            ensure!(
-                leader == self.leader,
-                ConsensusError::RandomCoinWithWrongLeader
-            );
-        } else {
-            ensure!(true, ConsensusError::RandomCoinWithWrongShares);
-        }
+    //     let mut sigs = BTreeMap::new(); //构建BTree选择leader
+    //                                     // Check the random shares.
+    //     for share in &self.shares {
+    //         share.verify(committee, pk_set)?;
+    //         sigs.insert(committee.id(share.author), share.signature_share.clone());
+    //     }
+    //     if let Ok(sig) = pk_set.combine_signatures(sigs.iter()) {
+    //         let id = usize::from_be_bytes((&sig.to_bytes()[0..8]).try_into().unwrap())
+    //             % committee.size();
+    //         let mut keys: Vec<_> = committee.authorities.keys().cloned().collect();
+    //         keys.sort();
+    //         let leader = keys[id];
+    //         ensure!(
+    //             leader == self.leader,
+    //             ConsensusError::RandomCoinWithWrongLeader
+    //         );
+    //     } else {
+    //         ensure!(true, ConsensusError::RandomCoinWithWrongShares);
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }
 
 impl fmt::Debug for RandomCoin {

@@ -15,7 +15,7 @@ pub enum PayloadStatus {
 #[derive(Debug)]
 pub enum ConsensusMempoolMessage {
     Get(usize, oneshot::Sender<Vec<Digest>>),
-    Verify(Box<Block>, oneshot::Sender<PayloadStatus>),
+    Verify(Box<Block>, oneshot::Sender<PayloadStatus>, u8),
     Cleanup(Vec<Digest>, SeqNumber),
 }
 
@@ -40,9 +40,9 @@ impl MempoolDriver {
             .expect("Failed to receive payload from mempool")
     }
 
-    pub async fn verify(&mut self, block: Block) -> ConsensusResult<bool> {
+    pub async fn verify(&mut self, block: Block, tag: u8) -> ConsensusResult<bool> {
         let (sender, receiver) = oneshot::channel();
-        let message = ConsensusMempoolMessage::Verify(Box::new(block), sender);
+        let message = ConsensusMempoolMessage::Verify(Box::new(block), sender, tag);
         self.mempool_channel
             .send(message)
             .await
@@ -72,12 +72,12 @@ impl MempoolDriver {
             .expect("Failed to send message to mempool");
     }
 
-    // pub async fn cleanup_async(&mut self, b0: &Block) {
-    //     let digests = b0.payload.iter().cloned().collect();
-    //     let message = ConsensusMempoolMessage::Cleanup(digests, b0.height);
-    //     self.mempool_channel
-    //         .send(message)
-    //         .await
-    //         .expect("Failed to send message to mempool");
-    // }
+    pub async fn cleanup_par(&mut self, b0: &Block) {
+        let digests = b0.payload.iter().cloned().collect();
+        let message = ConsensusMempoolMessage::Cleanup(digests, b0.height);
+        self.mempool_channel
+            .send(message)
+            .await
+            .expect("Failed to send message to mempool");
+    }
 }

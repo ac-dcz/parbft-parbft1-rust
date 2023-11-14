@@ -86,7 +86,7 @@ impl Consensus {
             committee.clone(),
             store.clone(),
             /* network_filter */ tx_filter.clone(),
-            /* core_channel */ tx_core,
+            /* core_channel */ tx_core.clone(),
             parameters.sync_retry_delay,
         )
         .await;
@@ -105,6 +105,7 @@ impl Consensus {
                     mempool_driver,
                     synchronizer,
                     /* core_channel */ rx_core,
+                    tx_core,
                     /* network_filter */ tx_filter,
                     /* commit_channel */ tx_commit,
                     true,
@@ -127,6 +128,7 @@ impl Consensus {
                     mempool_driver,
                     synchronizer,
                     /* core_channel */ rx_core,
+                    tx_core,
                     /* network_filter */ tx_filter,
                     /* commit_channel */ tx_commit,
                     true,
@@ -149,6 +151,7 @@ impl Consensus {
                     mempool_driver,
                     synchronizer,
                     /* core_channel */ rx_core,
+                    tx_core,
                     /* network_filter */ tx_filter,
                     /* commit_channel */ tx_commit,
                     false,

@@ -22,6 +22,9 @@ pub type ConsensusResult<T> = Result<T, ConsensusError>;
 
 #[derive(Error, Debug)]
 pub enum ConsensusError {
+    #[error("epoch {0} end")]
+    EpochEnd(SeqNumber),
+
     #[error("Network error: {0}")]
     NetworkError(#[from] std::io::Error),
 
@@ -66,6 +69,9 @@ pub enum ConsensusError {
     #[error("Received more than one aba_val from {0}")]
     AuthorityReuseinABA(PublicKey),
 
+    #[error("Received more than one PrePare from {0}")]
+    AuthorityReuseinPrePare(PublicKey),
+
     #[error("Received more than one timeout from {0}")]
     AuthorityReuseinTC(PublicKey),
 
@@ -109,7 +115,4 @@ pub enum ConsensusError {
         rd2: SeqNumber,
         rd3: SeqNumber,
     },
-
-    #[error("PES path output")]
-    PESOutput,
 }
