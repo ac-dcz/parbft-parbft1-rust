@@ -21,7 +21,7 @@ async fn verify_empty() {
         tx_network,
         /* sync_retry_delay */ 10_000,
     );
-    let result = synchronizer.verify_payload(block()).await;
+    let result = synchronizer.verify_payload(block(), OPT).await;
     assert!(result.is_ok());
     assert!(result.unwrap());
 }
@@ -58,7 +58,7 @@ async fn verify_wait() {
     let author = block.author;
 
     // Ensure the synchronizer replies with WAIT.
-    let result = synchronizer.verify_payload(block).await;
+    let result = synchronizer.verify_payload(block, OPT).await;
     assert!(result.is_ok());
     assert!(!result.unwrap());
 
@@ -82,7 +82,7 @@ async fn verify_wait() {
     let _ = store.write(payload_1.to_vec(), Vec::new()).await;
     let _ = store.write(payload_2.to_vec(), Vec::new()).await;
     match rx_consensus.recv().await {
-        Some(ConsensusMessage::LoopBack(b)) => assert_eq!(b.digest(), digest),
+        Some(ConsensusMessage::HsLoopBack(b)) => assert_eq!(b.digest(), digest),
         _ => assert!(false),
     }
 }

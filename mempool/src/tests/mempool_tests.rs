@@ -2,7 +2,7 @@ use super::*;
 use crate::common::{block, committee, keys, payload};
 use crate::config::Parameters;
 use bytes::Bytes;
-use consensus::{Block, PayloadStatus};
+use consensus::{Block, PayloadStatus, OPT};
 use crypto::Hash as _;
 use futures::future::try_join_all;
 use futures::sink::SinkExt as _;
@@ -53,7 +53,7 @@ async fn end_to_end() {
                 let payload = vec![payload().digest()];
                 let block = Block { payload, ..block() };
                 let (sender, receiver) = oneshot::channel();
-                let message = ConsensusMempoolMessage::Verify(Box::new(block), sender);
+                let message = ConsensusMempoolMessage::Verify(Box::new(block), sender, OPT);
                 tx_consensus_mempool.send(message).await.unwrap();
                 match receiver.await {
                     Ok(PayloadStatus::Accept) => assert!(true),

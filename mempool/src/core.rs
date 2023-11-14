@@ -205,8 +205,8 @@ impl Core {
         }
     }
 
-    async fn verify_payload(&mut self, block: Box<Block>) -> MempoolResult<bool> {
-        self.synchronizer.verify_payload(*block).await
+    async fn verify_payload(&mut self, block: Box<Block>, tag: u8) -> MempoolResult<bool> {
+        self.synchronizer.verify_payload(*block, tag).await
     }
 
     async fn cleanup(&mut self, digests: Vec<Digest>, round: SeqNumber) {
@@ -240,8 +240,8 @@ impl Core {
                             log(result.as_ref().map(|_| &()));
                             let _ = sender.send(result.unwrap_or_default());
                         },
-                        ConsensusMempoolMessage::Verify(block, sender) => {
-                            let result = self.verify_payload(block).await;
+                        ConsensusMempoolMessage::Verify(block, sender,tag) => {
+                            let result = self.verify_payload(block,tag).await;
                             log(result.as_ref().map(|_| &()));
                             let status = match result {
                                 Ok(true) => PayloadStatus::Accept,
