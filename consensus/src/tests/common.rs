@@ -1,7 +1,7 @@
 use crate::config::Committee;
-use crate::core::{Bool, HeightNumber, SeqNumber};
+use crate::core::SeqNumber;
 use crate::mempool::{ConsensusMempoolMessage, PayloadStatus};
-use crate::messages::{Block, HVote, Timeout, QC};
+use crate::messages::{Block, HVote, QC};
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
 use rand::rngs::StdRng;
@@ -44,22 +44,15 @@ impl Block {
     pub fn new_from_key(
         qc: QC,
         author: PublicKey,
-        view: SeqNumber,
-        round: SeqNumber,
-        height: HeightNumber,
-        fallback: Bool,
+        height: SeqNumber,
         payload: Vec<Digest>,
         secret: &SecretKey,
     ) -> Self {
         let block = Block {
             qc,
-            tc: None,
-            coin: None,
             author,
-            view,
-            height: round,
             height,
-            fallback,
+            epoch: 0,
             payload,
             signature: Signature::default(),
         };
@@ -77,20 +70,15 @@ impl PartialEq for Block {
 impl HVote {
     pub fn new_from_key(
         hash: Digest,
-        view: SeqNumber,
-        round: SeqNumber,
-        height: HeightNumber,
-        fallback: Bool,
+        height: SeqNumber,
         proposer: PublicKey,
         author: PublicKey,
         secret: &SecretKey,
     ) -> Self {
         let vote = Self {
             hash,
-            view,
-            height: round,
             height,
-            fallback,
+            epoch: 0,
             proposer,
             author,
             signature: Signature::default(),
@@ -106,61 +94,31 @@ impl PartialEq for HVote {
     }
 }
 
-impl Timeout {
-    pub fn new_from_key(
-        high_qc: QC,
-        seq: SeqNumber,
-        author: PublicKey,
-        secret: &SecretKey,
-    ) -> Self {
-        let timeout = Self {
-            high_qc,
-            seq,
-            author,
-            signature: Signature::default(),
-        };
-        let signature = Signature::new(&timeout.digest(), &secret);
-        Self {
-            signature,
-            ..timeout
-        }
-    }
-}
-
-impl PartialEq for Timeout {
-    fn eq(&self, other: &Self) -> bool {
-        self.digest() == other.digest()
-    }
-}
+// impl SPBVote {
+//     pub fn new_from_key(value: SPBValue, author: PublicKey) -> Self {
+//         Self {
+//             hash: value.digest(),
+//             phase: value.phase,
+//             height: value.block.height,
+//             epoch: value.block.epoch,
+//             round: value.round,
+//             proposer: value.block.author,
+//             author,
+//             signature_share,SignatureShare::,
+//         }
+//     }
+// }
 
 // Fixture.
 pub fn block() -> Block {
     let (public_key, secret_key) = keys().pop().unwrap();
-    Block::new_from_key(
-        QC::genesis(),
-        public_key,
-        0,
-        1,
-        0,
-        0,
-        Vec::new(),
-        &secret_key,
-    )
+    Block::new_from_key(QC::genesis(), public_key, 1, Vec::new(), &secret_key)
 }
 
 // Fixture.
 pub fn vote() -> HVote {
     let (public_key, secret_key) = keys().pop().unwrap();
-    HVote::new_from_key(
-        block().digest(),
-        0,
-        1,
-        0,
-        0,
-        block().author,
-        public_key,
-        &secret_key,
-    )
+    HVote::new_from_key(block().digest(), 1, block().author, public_key, &secret_key)
 }
 
 // Fixture.
@@ -169,10 +127,8 @@ pub fn qc() -> QC {
     let (public_key, _) = keys.pop().unwrap();
     let qc = QC {
         hash: Digest::default(),
-        view: 0,
         height: 1,
-        height: 0,
-        fallback: 0,
+        epoch: 0,
         proposer: public_key,
         acceptor: public_key,
         votes: Vec::new(),
@@ -198,21 +154,16 @@ pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
             let block = Block::new_from_key(
                 latest_qc.clone(),
                 *public_key,
-                0,
                 1 + i as SeqNumber,
-                0,
-                0,
                 Vec::new(),
                 secret_key,
             );
 
             // Make a qc for that block (it will be used for the next block).
             let qc = QC {
+                epoch: 0,
                 hash: block.digest(),
-                view: block.view,
                 height: block.height,
-                height: block.height,
-                fallback: block.fallback,
                 proposer: block.author,
                 acceptor: block.author,
                 votes: Vec::new(),
@@ -244,7 +195,7 @@ impl MockMempool {
                         rng.fill_bytes(&mut payload);
                         sender.send(vec![Digest(payload)]).unwrap();
                     }
-                    ConsensusMempoolMessage::Verify(_block, sender) => {
+                    ConsensusMempoolMessage::Verify(_block, sender, _) => {
                         sender.send(PayloadStatus::Accept).unwrap()
                     }
                     ConsensusMempoolMessage::Cleanup(_digests, _round) => (),

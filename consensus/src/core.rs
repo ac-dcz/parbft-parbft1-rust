@@ -24,6 +24,10 @@ use tokio::time::{sleep, Duration};
 #[path = "tests/core_tests.rs"]
 pub mod core_tests;
 
+#[cfg(test)]
+#[path = "tests/smvba_tests.rs"]
+pub mod smvba_tests;
+
 pub type SeqNumber = u64; // For both round and view
 
 pub const OPT: u8 = 0;
@@ -127,7 +131,7 @@ impl Core {
         pes_path: bool,
     ) -> Self {
         let aggregator = Aggregator::new(committee.clone());
-        Self {
+        let mut core = Self {
             name,
             committee,
             parameters,
@@ -174,7 +178,10 @@ impl Core {
             aba_mux_vals: HashMap::new(),
             aba_output_messages: HashMap::new(),
             par_value_wait: HashMap::new(),
-        }
+        };
+        core.update_smvba_state(1, 1);
+        core.update_hs_state(1);
+        return core;
     }
 
     //initlization epoch
@@ -350,6 +357,7 @@ impl Core {
     #[async_recursion]
     async fn handle_hs_vote(&mut self, vote: &HVote) -> ConsensusResult<()> {
         debug!("Processing OPT Vote {:?}", vote);
+        // println!("Processing OPT Vote {:?}", vote);
         if vote.height < self.height || self.epoch != vote.epoch {
             return Ok(());
         }
@@ -360,7 +368,7 @@ impl Core {
         // Add the new vote to our aggregator and see if we have a quorum.
         if let Some(qc) = self.aggregator.add_hs_vote(vote.clone())? {
             debug!("Assembled {:?}", qc);
-
+            // println!("Assembled {:?}", qc);
             // Process the QC.
             self.process_qc(&qc).await;
 
@@ -491,12 +499,14 @@ impl Core {
     #[async_recursion]
     async fn process_opt_block(&mut self, block: &Block) -> ConsensusResult<()> {
         debug!("Processing OPT Block {:?}", block);
+        // println!("Processing OPT Block {:?}", block);
 
         // Let's see if we have the last three ancestors of the block, that is:
         //      b0 <- |qc0; b1| <- |qc1; block|
         // If we don't, the synchronizer asks for them to other nodes. It will
         // then ensure we process both ancestors in the correct order, and
         // finally make us resume processing this block.
+
         let (b0, b1) = match self.synchronizer.get_ancestors(block).await? {
             Some(ancestors) => ancestors,
             None => {
@@ -507,9 +517,9 @@ impl Core {
 
         //TODO:
         // 1. 对 height-1 的 block 发送 prepare-opt
-        if self.height > 1 {
+        if self.pes_path && block.height > 1 {
             self.active_prepare_pahse(
-                self.height - 1,
+                block.height - 1,
                 &b1,                                 // Block h-1
                 PrePareProof::OPT(block.qc.clone()), //qc h-1
                 OPT,
@@ -517,7 +527,7 @@ impl Core {
             .await?;
         }
         // 2. 终止 height-2 的 SMVBA
-        if self.height > 2 {
+        if self.pes_path && self.height > 2 {
             self.terminate_smvba(self.height - 2).await?;
         }
 
@@ -584,7 +594,7 @@ impl Core {
         proof: &SPBProof,
     ) -> ConsensusResult<()> {
         debug!("Processing PES Block {:?}", value.block);
-
+        // println!("Processing PES Block {:?}", value.block);
         //如果是lock 阶段 保存
         if value.phase == LOCK_PHASE {
             self.spb_locks
@@ -595,22 +605,21 @@ impl Core {
 
         //vote
         if let Some(spb_vote) = self.make_spb_vote(&value).await {
-            debug!(
-                "SPB vote height {}, round {},",
-                spb_vote.height, spb_vote.round
-            );
-
             //将vote 广播给value 的 propose
-            self.handle_spb_vote(&spb_vote).await?;
-            let message = ConsensusMessage::SPBVote(spb_vote);
-            Synchronizer::transmit(
-                message,
-                &self.name,
-                Some(&value.block.author),
-                &self.network_filter,
-                &self.committee,
-            )
-            .await?;
+
+            if self.name != value.block.author {
+                let message = ConsensusMessage::SPBVote(spb_vote);
+                Synchronizer::transmit(
+                    message,
+                    &self.name,
+                    Some(&value.block.author),
+                    &self.network_filter,
+                    &self.committee,
+                )
+                .await?;
+            } else {
+                self.handle_spb_vote(&spb_vote).await?;
+            }
         }
         Ok(())
     }
@@ -714,7 +723,7 @@ impl Core {
         epoch: SeqNumber,
         height: SeqNumber,
         round: SeqNumber,
-        phase: u8,
+        _phase: u8,
     ) -> bool {
         if self.epoch > epoch {
             return false;
@@ -726,10 +735,13 @@ impl Core {
         if *cur_round > round {
             return false;
         }
-        let cur_phase = self.spb_current_phase.get(&(height, round)).unwrap();
-        if *cur_phase > phase {
-            return false;
-        }
+        // let cur_phase = self
+        //     .spb_current_phase
+        //     .entry((height, round))
+        //     .or_insert(INIT_PHASE);
+        // if *cur_phase > phase {
+        //     return false;
+        // }
         true
     }
 
@@ -762,6 +774,8 @@ impl Core {
 
     #[async_recursion]
     async fn handle_spb_vote(&mut self, spb_vote: &SPBVote) -> ConsensusResult<()> {
+        debug!("Processing {:?}", spb_vote);
+
         //check message is timeout?
         ensure!(
             self.smvba_msg_filter(
@@ -773,13 +787,14 @@ impl Core {
             ConsensusError::TimeOutMessage(spb_vote.height, spb_vote.round)
         );
         spb_vote.verify(&self.committee, &self.pk_set)?;
+
         if let Some(proof) = self.aggregator.add_spb_vote(spb_vote.clone())? {
             debug!("Create spb proof {:?}!", proof);
-
+            // println!("Create spb proof {:?}!", proof);
             self.spb_current_phase
                 .insert((spb_vote.height, spb_vote.round), proof.phase); //phase + 1
 
-            let value = self.spb_proposes.get(&(proof.round, proof.height)).unwrap();
+            let value = self.spb_proposes.get(&(proof.height, proof.round)).unwrap();
             //进行下一阶段的发送
             if proof.phase == LOCK_PHASE {
                 self.broadcast_pes_propose(value.block.clone(), proof)
@@ -802,7 +817,8 @@ impl Core {
 
     async fn handle_spb_finish(&mut self, value: SPBValue, proof: SPBProof) -> ConsensusResult<()> {
         debug!("Processing finish {:?}", proof);
-        //check message is timeout?
+        // println!("Processing finish {:?}", proof);
+        // check message is timeout?
         ensure!(
             self.smvba_msg_filter(value.block.epoch, proof.height, proof.round, proof.phase),
             ConsensusError::TimeOutMessage(proof.height, proof.round)
@@ -810,8 +826,8 @@ impl Core {
         value.verify(&self.committee, &proof, &self.pk_set)?;
         let d_flag = self
             .smvba_d_flag
-            .get_mut(&(proof.height, proof.round))
-            .unwrap();
+            .entry((proof.height, proof.round))
+            .or_insert(false);
 
         if *d_flag {
             return Ok(());
@@ -828,7 +844,7 @@ impl Core {
             .unwrap()
             .len() as Stake;
 
-        if weight >= self.committee.quorum_threshold() {
+        if weight == self.committee.quorum_threshold() {
             *d_flag = true;
             let mdone = MDone::new(
                 self.name,
@@ -856,16 +872,16 @@ impl Core {
 
     async fn handle_smvba_done(&mut self, mdone: MDone) -> ConsensusResult<()> {
         debug!("Processing  {:?}", mdone);
-
+        // println!("Processing  {:?}", mdone);
         ensure!(
             self.smvba_msg_filter(mdone.epoch, mdone.height, mdone.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(mdone.height, mdone.round)
         );
-
+        mdone.verify()?;
         let d_flag = self
             .smvba_d_flag
-            .get_mut(&(mdone.height, mdone.round))
-            .unwrap();
+            .entry((mdone.height, mdone.round))
+            .or_insert(false);
 
         let set = self
             .smvba_dones
@@ -875,7 +891,7 @@ impl Core {
         let mut weight = set.len() as Stake;
 
         // d_flag= false and weight == f+1?
-        if *d_flag == false || weight == self.committee.random_coin_threshold() {
+        if *d_flag == false && weight == self.committee.random_coin_threshold() {
             *d_flag = true;
             let mut temp = mdone.clone();
             temp.author = self.name;
@@ -898,8 +914,8 @@ impl Core {
                 .insert((mdone.height, mdone.round), FIN_PHASE); //abandon spb message
 
             let share = RandomnessShare::new(
-                self.height,
-                self.epoch,
+                mdone.height,
+                mdone.epoch,
                 mdone.round,
                 self.name,
                 self.signature_service.clone(),
@@ -921,8 +937,8 @@ impl Core {
     }
 
     async fn handle_smvba_prevote(&mut self, prevote: MPreVote) -> ConsensusResult<()> {
-        debug!("Processing  {:?}", prevote);
-
+        // debug!("Processing  {:?}", prevote);
+        println!("Processing  {:?}", prevote);
         ensure!(
             self.smvba_msg_filter(prevote.epoch, prevote.height, prevote.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(prevote.height, prevote.round)
@@ -939,9 +955,9 @@ impl Core {
             .unwrap();
 
         let mut mvote: Option<MVote> = None;
-        match &prevote.tag {
-            PreVoteTag::Yes(value, proof) => {
-                if !(*n_flag) {
+        if !(*y_flag) && !(*n_flag) {
+            match &prevote.tag {
+                PreVoteTag::Yes(value, proof) => {
                     *y_flag = true;
                     if let Some(vote) = self.make_spb_vote(value).await {
                         mvote = Some(
@@ -958,9 +974,7 @@ impl Core {
                         );
                     }
                 }
-            }
-            PreVoteTag::No() => {
-                if !(*y_flag) {
+                PreVoteTag::No() => {
                     let set = self
                         .smvba_no_prevotes
                         .entry((prevote.height, prevote.round))
@@ -1004,8 +1018,8 @@ impl Core {
     }
 
     async fn handle_smvba_mvote(&mut self, mvote: MVote) -> ConsensusResult<()> {
-        debug!("Processing  {:?}", mvote);
-
+        // debug!("Processing  {:?}", mvote);
+        println!("Processing  {:?}", mvote);
         ensure!(
             self.smvba_msg_filter(mvote.epoch, mvote.height, mvote.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(mvote.height, mvote.round)
@@ -1025,7 +1039,7 @@ impl Core {
 
         match mvote.tag {
             MVoteTag::Yes(value, _, vote) => {
-                if let Some(fin_proof) = self.aggregator.add_spb_vote(vote)? {
+                if let Some(fin_proof) = self.aggregator.add_pre_vote(vote)? {
                     let mhalt = MHalt::new(
                         self.name,
                         mvote.leader,
@@ -1059,12 +1073,21 @@ impl Core {
 
     async fn handle_smvba_rs(&mut self, share: RandomnessShare) -> ConsensusResult<()> {
         debug!("Processing  {:?}", share);
-
+        // println!("Processing self {}, {:?}", self.name, share);
         ensure!(
             self.smvba_msg_filter(share.epoch, share.height, share.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(share.height, share.round)
         );
         share.verify(&self.committee, &self.pk_set)?;
+
+        if self
+            .leader_elector
+            .get_coin_leader(share.height, share.round)
+            .is_some()
+        {
+            return Ok(());
+        }
+
         if let Some(coin) = self.aggregator.add_smvba_random(share, &self.pk_set)? {
             self.leader_elector.add_random_coin(coin.clone());
 
@@ -1091,7 +1114,8 @@ impl Core {
                     self.signature_service.clone(),
                 )
                 .await;
-                let message = ConsensusMessage::SMVBAHalt(mhalt.clone());
+                self.handle_smvba_halt(mhalt.clone()).await?;
+                let message = ConsensusMessage::SMVBAHalt(mhalt);
                 Synchronizer::transmit(
                     message,
                     &self.name,
@@ -1100,7 +1124,6 @@ impl Core {
                     &self.committee,
                 )
                 .await?;
-                self.handle_smvba_halt(mhalt).await?;
             } else {
                 let mut pre_vote = MPreVote::new(
                     self.name,
@@ -1155,6 +1178,7 @@ impl Core {
 
     async fn handle_smvba_halt(&mut self, halt: MHalt) -> ConsensusResult<()> {
         debug!("Processing {:?}", halt);
+        // println!("Processing {:?}", halt);
         ensure!(
             self.smvba_msg_filter(halt.epoch, halt.height, halt.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(halt.height, halt.round)
@@ -1200,6 +1224,7 @@ impl Core {
 
     async fn handle_par_prepare(&mut self, prepare: PrePare) -> ConsensusResult<()> {
         debug!("Processing {:?}", prepare);
+        // println!("Processing {:?}", prepare);
         //不是一个epoch 或者 已经对aba 投过票
         if prepare.epoch != self.epoch || prepare.height + 2 <= self.height {
             return Ok(());
@@ -1273,7 +1298,8 @@ impl Core {
         }
 
         if let Some(val) = aba_val {
-            let message = ConsensusMessage::ParABAVal(val.clone());
+            self.handle_aba_val(val.clone()).await?;
+            let message = ConsensusMessage::ParABAVal(val);
             Synchronizer::transmit(
                 message,
                 &self.name,
@@ -1282,7 +1308,6 @@ impl Core {
                 &self.committee,
             )
             .await?;
-            self.handle_aba_val(val).await?;
         }
 
         //wait value?
@@ -1327,7 +1352,7 @@ impl Core {
 
         ensure!(
             used.insert(aba_val.author),
-            ConsensusError::AuthorityReuseinABA(aba_val.author)
+            ConsensusError::AuthorityReuseinABA(aba_val.author, aba_val.phase)
         );
 
         let temp_vals = self
@@ -1545,7 +1570,7 @@ impl Core {
 
         ensure!(
             out_set.insert(aba_out.author),
-            ConsensusError::AuthorityReuseinABA(aba_out.author)
+            ConsensusError::AuthorityReuseinABAOut(aba_out.author)
         );
 
         let mut nums = out_set.len() as Stake;
@@ -1712,7 +1737,10 @@ impl Core {
                     debug!("epoch {e} end");
                     return; //ABA输出1 直接退出当前epoch
                 }
-                Err(e) => warn!("{}", e),
+                Err(e) => {
+                    //warn!("{}", e),
+                    println!("{}", e)
+                }
             }
         }
     }

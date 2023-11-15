@@ -17,6 +17,7 @@ pub struct Aggregator {
     committee: Committee,
     hs_votes_aggregators: HashMap<SeqNumber, Box<QCMaker>>,
     spb_votes_aggregators: HashMap<(SeqNumber, SeqNumber, u8), Box<ProofMaker>>,
+    pre_votes_aggregators: HashMap<(SeqNumber, SeqNumber), Box<ProofMaker>>,
     smvba_randomcoin_aggregators: HashMap<(SeqNumber, SeqNumber), Box<SMVBARandomCoinMaker>>,
     aba_randomcoin_aggregators: HashMap<(SeqNumber, SeqNumber), Box<ABARandomCoinMaker>>,
 }
@@ -29,6 +30,7 @@ impl Aggregator {
             spb_votes_aggregators: HashMap::new(),
             smvba_randomcoin_aggregators: HashMap::new(),
             aba_randomcoin_aggregators: HashMap::new(),
+            pre_votes_aggregators: HashMap::new(),
         }
     }
 
@@ -50,6 +52,17 @@ impl Aggregator {
         // Add the new vote to our aggregator and see if we have a QC.
         self.spb_votes_aggregators
             .entry((vote.height, vote.round, vote.phase))
+            .or_insert_with(|| Box::new(ProofMaker::new()))
+            .append(vote, &self.committee)
+    }
+
+    pub fn add_pre_vote(&mut self, vote: SPBVote) -> ConsensusResult<Option<SPBProof>> {
+        // TODO [issue #7]: A bad node may make us run out of memory by sending many votes
+        // with different round numbers or different digests.
+
+        // Add the new vote to our aggregator and see if we have a QC.
+        self.pre_votes_aggregators
+            .entry((vote.height, vote.round))
             .or_insert_with(|| Box::new(ProofMaker::new()))
             .append(vote, &self.committee)
     }
@@ -84,6 +97,7 @@ impl Aggregator {
     pub fn cleanup_spb_vote(&mut self, height: &SeqNumber) {
         self.spb_votes_aggregators
             .retain(|(h, _, ..), _| h > height);
+        self.pre_votes_aggregators.retain(|(h, ..), _| h > height);
     }
 
     pub fn cleanup_mvba_random(&mut self, height: &SeqNumber) {
@@ -160,14 +174,15 @@ impl ProofMaker {
         // Ensure it is the first time this authority votes.
         ensure!(
             self.used.insert(author),
-            ConsensusError::AuthorityReuseinProof(author)
+            ConsensusError::AuthorityReuseinProof(author, self.used.clone())
         );
         self.votes.push(vote);
         self.weight += committee.stake(&author);
+
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures QC is only made once.
             return Ok(Some(SPBProof {
-                height: height,
+                height,
                 phase: phase + 1, //为下一个阶段产生proof
                 round,
                 shares: self.votes.clone(),
@@ -223,11 +238,7 @@ impl SMVBARandomCoinMaker {
                 let mut keys: Vec<_> = committee.authorities.keys().cloned().collect();
                 keys.sort();
                 let leader = keys[id];
-                // debug!(
-                //     "Random coin of view {} elects leader id {}",
-                //     randomness_share.seq, id
-                // );
-                // Multicast the random coin
+
                 let random_coin = RandomCoin {
                     height: share.height,
                     epoch: share.epoch,
@@ -272,8 +283,8 @@ impl ABARandomCoinMaker {
         );
         self.shares.push(share.clone());
         self.weight += committee.stake(&author);
-        if self.weight >= committee.random_coin_threshold() {
-            self.weight = 0; // Ensures QC is only made once.
+        if self.weight == committee.random_coin_threshold() {
+            // self.weight = 0; // Ensures QC is only made once.
             let mut sigs = BTreeMap::new();
             // Check the random shares.
             for share in self.shares.clone() {

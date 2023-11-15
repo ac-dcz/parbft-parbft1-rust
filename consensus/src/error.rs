@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::core::SeqNumber;
 use crypto::{CryptoError, Digest, PublicKey};
 use thiserror::Error;
@@ -63,11 +65,14 @@ pub enum ConsensusError {
     #[error("Received more than one vote from {0}")]
     AuthorityReuseinQC(PublicKey),
 
-    #[error("Received more than one pre_vote from {0}")]
-    AuthorityReuseinProof(PublicKey),
+    #[error("Received more than one proof from {0} {1:?}")]
+    AuthorityReuseinProof(PublicKey, HashSet<PublicKey>),
 
-    #[error("Received more than one aba_val from {0}")]
-    AuthorityReuseinABA(PublicKey),
+    #[error("Received more than one aba_val from {0} phase {1}")]
+    AuthorityReuseinABA(PublicKey, u8),
+
+    #[error("Received more than one aba_out from {0}")]
+    AuthorityReuseinABAOut(PublicKey),
 
     #[error("Received more than one PrePare from {0}")]
     AuthorityReuseinPrePare(PublicKey),

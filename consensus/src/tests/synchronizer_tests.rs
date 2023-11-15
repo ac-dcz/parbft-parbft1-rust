@@ -11,7 +11,7 @@ async fn get_existing_parent_block() {
     // Add the block b2 to the store.
     let path = ".db_test_get_existing_parent_block";
     let _ = fs::remove_dir_all(path);
-    let mut store = Store::new(path).unwrap();
+    let mut store = Store::new_default().unwrap();
     let key = b2.digest().to_vec();
     let value = bincode::serialize(&b2).unwrap();
     let _ = store.write(key, value).await;
@@ -42,7 +42,7 @@ async fn get_genesis_parent_block() {
     // Make a new synchronizer.
     let path = ".db_test_get_genesis_parent_block";
     let _ = fs::remove_dir_all(path);
-    let store = Store::new(path).unwrap();
+    let store = Store::new_default().unwrap();
     let (name, _) = keys().pop().unwrap();
     let (tx_network, _) = channel(1);
     let (tx_core, _) = channel(1);
@@ -72,7 +72,7 @@ async fn get_missing_parent_block() {
     // Make a new synchronizer.
     let path = ".db_test_get_missing_parent_block";
     let _ = fs::remove_dir_all(path);
-    let mut store = Store::new(path).unwrap();
+    let mut store = Store::new_default().unwrap();
     let (name, _) = keys().pop().unwrap();
     let (tx_network, mut rx_network) = channel(1);
     let (tx_core, mut rx_core) = channel(1);

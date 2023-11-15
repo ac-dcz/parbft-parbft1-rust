@@ -286,7 +286,7 @@ impl SPBVote {
 impl Hash for SPBVote {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(&self.hash);
+        hasher.update(self.hash.clone());
         hasher.update(self.phase.to_be_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -296,8 +296,8 @@ impl fmt::Debug for SPBVote {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "RandomnessShare (author {}, view {}, sig share {:?})",
-            self.author, self.height, self.signature_share
+            "spb vote (author {}, height {}, round {}, phase {}, proposer {})",
+            self.author, self.height, self.round, self.phase, self.proposer,
         )
     }
 }
@@ -342,7 +342,11 @@ impl SPBProof {
 
 impl fmt::Debug for SPBProof {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "SPBProof(round {}, phase {})", self.round, self.phase)
+        write!(
+            f,
+            "SPBProof(height {} ,round {}, phase {})",
+            self.height, self.round, self.phase
+        )
     }
 }
 
@@ -855,7 +859,7 @@ impl fmt::Debug for PrePare {
         } else if self.tag == PES {
             tag = "PES".to_string();
         }
-        write!(f, "PrePare(tag {}, block {})", tag, self.block)
+        write!(f, "PrePare(tag {}, block {:?})", tag, self.block)
     }
 }
 
@@ -1119,8 +1123,8 @@ impl fmt::Debug for RandomnessShare {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "RandomnessShare (author {}, view {}, sig share {:?})",
-            self.author, self.height, self.signature_share
+            "RandomnessShare (author {}, height {},round {})",
+            self.author, self.height, self.round,
         )
     }
 }

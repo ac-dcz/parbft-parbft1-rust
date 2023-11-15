@@ -111,6 +111,7 @@ impl<'de> Deserialize<'de> for PublicKey {
     }
 }
 
+#[derive(Clone)]
 pub struct SecretKey([u8; 64]);
 
 impl SecretKey {

@@ -1,6 +1,6 @@
 use super::*;
 use crate::common::{committee, keys, qc, vote};
-
+use crypto::Hash;
 #[test]
 fn add_vote() {
     let mut aggregator = Aggregator::new(committee());
@@ -15,55 +15,25 @@ fn make_qc() {
     let mut keys = keys();
     let qc = qc();
     let hash = qc.digest();
-    let view = qc.view;
-    let round = qc.height;
     let height = qc.height;
-    let fallback = qc.fallback;
     let proposer = qc.proposer;
 
     // Add 2f+1 votes to the aggregator and ensure it returns the cryptographic
     // material to make a valid QC.
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = HVote::new_from_key(
-        hash.clone(),
-        view,
-        round,
-        height,
-        fallback,
-        proposer,
-        public_key,
-        &secret_key,
-    );
+    let vote = HVote::new_from_key(hash.clone(), height, proposer, public_key, &secret_key);
     let result = aggregator.add_hs_vote(vote);
     assert!(result.is_ok());
     assert!(result.unwrap().is_none());
 
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = HVote::new_from_key(
-        hash.clone(),
-        view,
-        round,
-        height,
-        fallback,
-        proposer,
-        public_key,
-        &secret_key,
-    );
+    let vote = HVote::new_from_key(hash.clone(), height, proposer, public_key, &secret_key);
     let result = aggregator.add_hs_vote(vote);
     assert!(result.is_ok());
     assert!(result.unwrap().is_none());
 
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = HVote::new_from_key(
-        hash.clone(),
-        view,
-        round,
-        height,
-        fallback,
-        proposer,
-        public_key,
-        &secret_key,
-    );
+    let vote = HVote::new_from_key(hash.clone(), height, proposer, public_key, &secret_key);
     match aggregator.add_hs_vote(vote) {
         Ok(Some(qc)) => assert!(qc.verify(&committee()).is_ok()),
         _ => assert!(false),
@@ -78,10 +48,8 @@ fn cleanup() {
     let result = aggregator.add_hs_vote(vote());
     assert!(result.is_ok());
     assert_eq!(aggregator.hs_votes_aggregators.len(), 1);
-    assert!(aggregator.timeouts_aggregators.is_empty());
 
     // Clean up the aggregator.
     aggregator.cleanup_hs_vote(&2);
     assert!(aggregator.hs_votes_aggregators.is_empty());
-    assert!(aggregator.timeouts_aggregators.is_empty());
 }
