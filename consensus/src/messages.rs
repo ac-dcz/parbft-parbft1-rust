@@ -29,7 +29,7 @@ impl Block {
     pub async fn new(
         qc: QC,
         author: PublicKey,
-        round: SeqNumber,
+        height: SeqNumber,
         epoch: SeqNumber,
         payload: Vec<Digest>,
         mut signature_service: SignatureService,
@@ -37,7 +37,7 @@ impl Block {
         let block = Self {
             qc,
             author,
-            height: round,
+            height,
             epoch,
             payload,
             signature: Signature::default(),
@@ -235,23 +235,23 @@ pub struct SPBVote {
     pub round: SeqNumber,
     pub proposer: PublicKey,
     pub author: PublicKey,
-    pub signature_share: SignatureShare,
+    pub signature_share: Option<SignatureShare>,
 }
 
 impl SPBVote {
     pub async fn new(
         value: SPBValue,
         author: PublicKey,
-        mut signature_service: SignatureService,
+        mut _signature_service: SignatureService,
     ) -> Self {
-        let mut hasher = Sha512::new();
-        hasher.update(value.digest());
-        hasher.update(value.phase.to_be_bytes());
-        let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
-        let signature_share = signature_service
-            .request_tss_signature(digest)
-            .await
-            .unwrap();
+        // let mut hasher = Sha512::new();
+        // hasher.update(value.digest());
+        // hasher.update(value.phase.to_be_bytes());
+        // let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+        // let signature_share = signature_service
+        //     .request_tss_signature(digest)
+        //     .await
+        //     .unwrap();
 
         Self {
             hash: value.digest(),
@@ -261,23 +261,23 @@ impl SPBVote {
             round: value.round,
             proposer: value.block.author,
             author,
-            signature_share,
+            signature_share: None,
         }
     }
 
     //验证门限签名是否正确
-    pub fn verify(&self, committee: &Committee, pk_set: &PublicKeySet) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee, _pk_set: &PublicKeySet) -> ConsensusResult<()> {
         // Ensure the authority has voting rights.
         ensure!(
             committee.stake(&self.author) > 0,
             ConsensusError::UnknownAuthority(self.author)
         );
-        let tss_pk = pk_set.public_key_share(committee.id(self.author));
-        // Check the signature.
-        ensure!(
-            tss_pk.verify(&self.signature_share, &self.digest()),
-            ConsensusError::InvalidThresholdSignature(self.author)
-        );
+        // let tss_pk = pk_set.public_key_share(committee.id(self.author));
+        // // Check the signature.
+        // ensure!(
+        //     tss_pk.verify(&self.signature_share, &self.digest()),
+        //     ConsensusError::InvalidThresholdSignature(self.author)
+        // );
 
         Ok(())
     }

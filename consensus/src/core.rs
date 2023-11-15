@@ -335,7 +335,7 @@ impl Core {
                 #[cfg(feature = "benchmark")]
                 for x in &block.payload {
                     // NOTE: This log entry is used to compute performance.
-                    info!("Committed B{}({})", block.round, base64::encode(x));
+                    info!("Committed B{}({})", block.height, base64::encode(x));
                 }
             }
             debug!("Committed {:?}", block);
@@ -437,7 +437,7 @@ impl Core {
             #[cfg(feature = "benchmark")]
             for x in &block.payload {
                 // NOTE: This log entry is used to compute performance.
-                info!("Created B{}({})", block.round, base64::encode(x));
+                info!("Created B{}({})", block.height, base64::encode(x));
             }
         }
         debug!("Created {:?}", block);
@@ -446,6 +446,7 @@ impl Core {
     }
 
     async fn broadcast_opt_propose(&mut self, block: Block) -> ConsensusResult<()> {
+        self.process_opt_block(&block).await?;
         // Process our new block and broadcast it.
         let message = ConsensusMessage::HsPropose(block.clone());
         Synchronizer::transmit(
@@ -456,7 +457,6 @@ impl Core {
             &self.committee,
         )
         .await?;
-        self.process_opt_block(&block).await?;
 
         // Wait for the minimum block delay.
         sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
@@ -515,6 +515,18 @@ impl Core {
             }
         };
 
+        // Store the block only if we have already processed all its ancestors.
+        self.store_block(block).await;
+
+        // Check if we can commit the head of the 2-chain.
+        // Note that we commit blocks only if we have all its ancestors.
+        if b0.height + 1 == b1.height {
+            self.commit(b0.clone()).await?;
+        }
+
+        // Cleanup the mempool.
+        self.mempool_driver.cleanup(&b0, &b1, &block).await;
+
         //TODO:
         // 1. 对 height-1 的 block 发送 prepare-opt
         if self.pes_path && block.height > 1 {
@@ -530,18 +542,6 @@ impl Core {
         if self.pes_path && self.height > 2 {
             self.terminate_smvba(self.height - 2).await?;
         }
-
-        // Store the block only if we have already processed all its ancestors.
-        self.store_block(block).await;
-
-        // Check if we can commit the head of the 2-chain.
-        // Note that we commit blocks only if we have all its ancestors.
-        if b0.height + 1 == b1.height {
-            self.commit(b0.clone()).await?;
-        }
-
-        // Cleanup the mempool.
-        self.mempool_driver.cleanup(&b0, &b1, &block).await;
 
         // Ensure the block's round is as expected.
         // This check is important: it prevents bad leaders from producing blocks
@@ -789,8 +789,8 @@ impl Core {
         spb_vote.verify(&self.committee, &self.pk_set)?;
 
         if let Some(proof) = self.aggregator.add_spb_vote(spb_vote.clone())? {
-            debug!("Create spb proof {:?}!", proof);
-            // println!("Create spb proof {:?}!", proof);
+            // debug!("Create spb proof {:?}!", proof);
+            println!("Create spb proof {:?}!", proof);
             self.spb_current_phase
                 .insert((spb_vote.height, spb_vote.round), proof.phase); //phase + 1
 
@@ -854,9 +854,22 @@ impl Core {
                 proof.round,
             )
             .await;
-            let message = ConsensusMessage::SPBDone(mdone.clone());
+
+            let share = RandomnessShare::new(
+                mdone.height,
+                mdone.epoch,
+                mdone.round,
+                self.name,
+                self.signature_service.clone(),
+            )
+            .await;
+
+            self.handle_smvba_done(mdone.clone()).await?;
+            self.handle_smvba_rs(share.clone()).await?;
+
+            let message1 = ConsensusMessage::SPBDone(mdone);
             Synchronizer::transmit(
-                message,
+                message1,
                 &self.name,
                 None,
                 &self.network_filter,
@@ -864,7 +877,15 @@ impl Core {
             )
             .await?;
 
-            self.handle_smvba_done(mdone).await?;
+            let message2 = ConsensusMessage::SMVBACoinShare(share);
+            Synchronizer::transmit(
+                message2,
+                &self.name,
+                None,
+                &self.network_filter,
+                &self.committee,
+            )
+            .await?;
         }
 
         Ok(())
@@ -904,14 +925,9 @@ impl Core {
                 &self.committee,
             )
             .await?;
+
             set.insert(self.name);
             weight += 1;
-        }
-
-        // 2f+1?
-        if weight == self.committee.quorum_threshold() {
-            self.spb_current_phase
-                .insert((mdone.height, mdone.round), FIN_PHASE); //abandon spb message
 
             let share = RandomnessShare::new(
                 mdone.height,
@@ -921,16 +937,41 @@ impl Core {
                 self.signature_service.clone(),
             )
             .await;
-            let message = ConsensusMessage::SMVBACoinShare(share.clone());
+            self.handle_smvba_rs(share.clone()).await?;
+            let message2 = ConsensusMessage::SMVBACoinShare(share);
             Synchronizer::transmit(
-                message,
+                message2,
                 &self.name,
                 None,
                 &self.network_filter,
                 &self.committee,
             )
             .await?;
-            self.handle_smvba_rs(share).await?;
+        }
+
+        // 2f+1?
+        if weight == self.committee.quorum_threshold() {
+            self.spb_current_phase
+                .insert((mdone.height, mdone.round), FIN_PHASE); //abandon spb message
+
+            // let share = RandomnessShare::new(
+            //     mdone.height,
+            //     mdone.epoch,
+            //     mdone.round,
+            //     self.name,
+            //     self.signature_service.clone(),
+            // )
+            // .await;
+            // let message = ConsensusMessage::SMVBACoinShare(share.clone());
+            // Synchronizer::transmit(
+            //     message,
+            //     &self.name,
+            //     None,
+            //     &self.network_filter,
+            //     &self.committee,
+            // )
+            // .await?;
+            // self.handle_smvba_rs(share).await?;
         }
 
         Ok(())
@@ -1737,6 +1778,7 @@ impl Core {
                     debug!("epoch {e} end");
                     return; //ABA输出1 直接退出当前epoch
                 }
+                Err(ConsensusError::TimeOutMessage(..)) => {}
                 Err(e) => {
                     //warn!("{}", e),
                     println!("{}", e)

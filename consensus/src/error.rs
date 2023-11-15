@@ -53,7 +53,7 @@ pub enum ConsensusError {
     #[error("Invalid prepare tag {0}")]
     InvalidPrePareTag(u8),
 
-    #[error("timeout smvba message height {0},round {0}")]
+    #[error("timeout smvba message height {0},round {1}")]
     TimeOutMessage(SeqNumber, SeqNumber),
 
     #[error("Random coin with wrong leader")]
