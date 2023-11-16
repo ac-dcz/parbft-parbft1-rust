@@ -311,45 +311,31 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn commit(&mut self, block: Block) -> ConsensusResult<()> {
-        //防止分叉提交
-        if self.last_committed_height >= block.height {
-            return Ok(());
-        }
-
-        let mut to_commit = VecDeque::new();
-        to_commit.push_back(block.clone());
-
-        // Ensure we commit the entire chain. This is needed after view-change.
-        let mut parent = block.clone();
-        while self.last_committed_height + 1 < parent.height {
-            let ancestor = self
-                .synchronizer
-                .get_parent_block(&parent)
-                .await?
-                .expect("We should have all the ancestors by now");
-            to_commit.push_front(ancestor.clone());
-            parent = ancestor;
-        }
-
-        // Save the last committed block.
-        self.last_committed_height = block.height;
-
-        // Send all the newly committed blocks to the node's application layer.
-        while let Some(block) = to_commit.pop_back() {
-            if !block.payload.is_empty() {
-                info!("Committed {}", block);
+    async fn commit(&mut self, block: &Block) -> ConsensusResult<()> {
+        let mut current_block = block.clone();
+        while current_block.height > self.last_committed_height {
+            if !current_block.payload.is_empty() {
+                info!("Committed {}", current_block);
 
                 #[cfg(feature = "benchmark")]
-                for x in &block.payload {
-                    // NOTE: This log entry is used to compute performance.
-                    info!("Committed B{}({})", block.height, base64::encode(x));
+                for x in &current_block.payload {
+                    info!("Committed B{}({})", current_block.height, base64::encode(x));
                 }
+                // Cleanup the mempool.
+                self.mempool_driver.cleanup_par(&current_block).await;
             }
-            debug!("Committed {:?}", block);
-            if let Err(e) = self.commit_channel.send(block).await {
-                warn!("Failed to send block through the commit channel: {}", e);
-            }
+            debug!("Committed {}", current_block);
+            let parent = match self.synchronizer.get_parent_block(&current_block).await? {
+                Some(b) => b,
+                None => {
+                    debug!(
+                        "Commit ancestors, processing of {} suspended: missing parent",
+                        current_block.digest()
+                    );
+                    break;
+                }
+            };
+            current_block = parent;
         }
         Ok(())
     }
@@ -525,15 +511,27 @@ impl Core {
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
 
-        // Check if we can commit the head of the 2-chain.
-        // Note that we commit blocks only if we have all its ancestors.
-        if b0.height + 1 == b1.height {
-            self.commit(b0.clone()).await?;
+        // The chain should have consecutive round numbers by construction.
+        let mut consecutive_rounds = b0.height + 1 == b1.height;
+        consecutive_rounds &= b1.height + 1 == block.height;
+        ensure!(
+            consecutive_rounds || block.qc == QC::genesis(),
+            ConsensusError::NonConsecutiveRounds {
+                rd1: b0.height,
+                rd2: b1.height,
+                rd3: block.height
+            }
+        );
+
+        if b0.height > self.last_committed_height {
+            self.commit(&b0).await?;
+
+            self.last_committed_height = b0.height;
+            debug!("Committed {:?}", b0);
+            if let Err(e) = self.commit_channel.send(b0.clone()).await {
+                warn!("Failed to send block through the commit channel: {}", e);
+            }
         }
-
-        // Cleanup the mempool.
-        self.mempool_driver.cleanup(&b0, &b1, &block).await;
-
         //TODO:
         // 1. 对 height-1 的 block 发送 prepare-opt
         if self.pes_path && block.height > 1 {
@@ -1696,8 +1694,15 @@ impl Core {
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
 
-        self.commit(block.clone()).await?;
-        // Cleanup the mempool.
+        if block.height > self.last_committed_height {
+            self.commit(block).await?;
+
+            self.last_committed_height = block.height;
+            debug!("Committed {:?}", block);
+            if let Err(e) = self.commit_channel.send(block.clone()).await {
+                warn!("Failed to send block through the commit channel: {}", e);
+            }
+        }
 
         if tag == PES {
             //如果是悲观路径输出
