@@ -1657,8 +1657,10 @@ impl Core {
 
         if values[val].is_some() {
             //提交
-            let block = values[val].clone().unwrap();
-
+            let mut block = values[val].clone().unwrap();
+            if val as u8 == PES {
+                block.tag = PES;
+            }
             // Process the QC. This may allow us to advance round.
             self.process_qc(&block.qc).await;
 
@@ -1676,23 +1678,23 @@ impl Core {
         } else {
             self.par_value_wait.entry(height).or_insert([false, false])[val] = true;
         }
-
-        //如果是悲观路径输出
-        if val == 1 {
-            //epoch init
-            info!("ABA output 1,epoch {} end", self.epoch);
-            return Err(ConsensusError::EpochEnd(self.epoch));
-        }
-
         Ok(())
     }
 
     async fn process_par_out(&mut self, block: &Block) -> ConsensusResult<()> {
+        let tag = block.tag;
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
 
         self.commit(block.clone()).await?;
         // Cleanup the mempool.
+
+        if tag == PES {
+            //如果是悲观路径输出
+            info!("ABA output 1,epoch {} end", self.epoch);
+            return Err(ConsensusError::EpochEnd(self.epoch));
+        }
+
         self.mempool_driver.cleanup_par(block).await;
         Ok(())
     }

@@ -2,6 +2,7 @@ use crate::config::Committee;
 use crate::core::SeqNumber;
 use crate::mempool::{ConsensusMempoolMessage, PayloadStatus};
 use crate::messages::{Block, HVote, QC};
+use crate::OPT;
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
 use rand::rngs::StdRng;
@@ -55,6 +56,7 @@ impl Block {
             epoch: 0,
             payload,
             signature: Signature::default(),
+            tag: OPT,
         };
         let signature = Signature::new(&block.digest(), secret);
         Self { signature, ..block }

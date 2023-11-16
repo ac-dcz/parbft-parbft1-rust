@@ -132,7 +132,7 @@ class LocalBench:
 
             # Wait for the nodes to synchronize
             Print.info('Waiting for the nodes to synchronize...')
-            sleep(2 * self.node_parameters.timeout_delay / 1000)
+            sleep(1.5)
 
             # Wait for all transactions to be processed.
             Print.info(f'Running benchmark ({self.duration} sec)...')

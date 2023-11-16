@@ -23,6 +23,7 @@ pub struct Block {
     pub epoch: SeqNumber,
     pub payload: Vec<Digest>,
     pub signature: Signature,
+    pub tag: u8,
 }
 
 impl Block {
@@ -41,6 +42,7 @@ impl Block {
             epoch,
             payload,
             signature: Signature::default(),
+            tag: OPT,
         };
 
         let signature = signature_service.request_signature(block.digest()).await;
