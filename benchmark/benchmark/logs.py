@@ -92,6 +92,7 @@ class LogParser:
 
         tmp = findall(r'\[(.*Z) .* Created B\d+\(([^ ]+)\)', log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
+        print(tmp)
         proposals = self._merge_results([tmp])
 
         tmp = findall(r'\[(.*Z) .* Committed B\d+\(([^ ]+)\)', log)

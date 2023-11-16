@@ -87,11 +87,13 @@ pub struct Core {
     pes_path: bool,
     smvba_y_flag: HashMap<(SeqNumber, SeqNumber), bool>,
     smvba_n_flag: HashMap<(SeqNumber, SeqNumber), bool>,
-    smvba_d_flag: HashMap<(SeqNumber, SeqNumber), bool>,
+    smvba_d_flag: HashMap<(SeqNumber, SeqNumber), bool>, //2f+1 个finish？
     spb_proposes: HashMap<(SeqNumber, SeqNumber), SPBValue>,
     spb_finishs: HashMap<(SeqNumber, SeqNumber), HashMap<PublicKey, (SPBValue, SPBProof)>>,
     spb_locks: HashMap<(SeqNumber, SeqNumber), HashMap<PublicKey, (SPBValue, SPBProof)>>,
     spb_current_phase: HashMap<(SeqNumber, SeqNumber), u8>,
+    spb_abandon_flag: HashMap<(SeqNumber, SeqNumber), bool>,
+    smvba_halt_falg: HashMap<(SeqNumber, SeqNumber), bool>,
     smvba_dones: HashMap<(SeqNumber, SeqNumber), HashSet<PublicKey>>,
     smvba_current_round: HashMap<SeqNumber, SeqNumber>, // height->round
     // smvba_yes_votes: HashMap<(SeqNumber, SeqNumber), Vec<MVote>>,
@@ -161,6 +163,8 @@ impl Core {
             spb_finishs: HashMap::new(),
             spb_locks: HashMap::new(),
             spb_current_phase: HashMap::new(),
+            spb_abandon_flag: HashMap::new(),
+            smvba_halt_falg: HashMap::new(),
             smvba_current_round: HashMap::new(),
             smvba_dones: HashMap::new(),
             // smvba_yes_votes: HashMap::new(),
@@ -216,6 +220,8 @@ impl Core {
         self.aba_mux_vals = HashMap::new();
         self.aba_output_messages = HashMap::new();
         self.par_value_wait = HashMap::new();
+        self.spb_abandon_flag = HashMap::new();
+        self.smvba_halt_falg = HashMap::new();
         self.update_smvba_state(1, 1);
         self.update_hs_state(1);
     }
@@ -289,7 +295,7 @@ impl Core {
         Some(SPBVote::new(value.clone(), self.name, self.signature_service.clone()).await)
     }
 
-    async fn make_hs_vote(&mut self, block: &Block) -> Option<HVote> {
+    async fn make_opt_vote(&mut self, block: &Block) -> Option<HVote> {
         // Check if we can vote for this block.
         let safety_rule_1 = block.height > self.last_voted_height;
         let safety_rule_2 = block.qc.height + 1 == block.height;
@@ -304,7 +310,9 @@ impl Core {
         Some(HVote::new(&block, self.name, self.signature_service.clone()).await)
     }
 
+    #[async_recursion]
     async fn commit(&mut self, block: Block) -> ConsensusResult<()> {
+        //防止分叉提交
         if self.last_committed_height >= block.height {
             return Ok(());
         }
@@ -335,7 +343,7 @@ impl Core {
                 #[cfg(feature = "benchmark")]
                 for x in &block.payload {
                     // NOTE: This log entry is used to compute performance.
-                    info!("Committed B{}({})", block.height, base64::encode(x));
+                    info!("Committed B{}({})", block.round, base64::encode(x));
                 }
             }
             debug!("Committed {:?}", block);
@@ -355,7 +363,7 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn handle_hs_vote(&mut self, vote: &HVote) -> ConsensusResult<()> {
+    async fn handle_opt_vote(&mut self, vote: &HVote) -> ConsensusResult<()> {
         debug!("Processing OPT Vote {:?}", vote);
         // println!("Processing OPT Vote {:?}", vote);
         if vote.height < self.height || self.epoch != vote.epoch {
@@ -475,6 +483,7 @@ impl Core {
                 .insert((value.block.height, value.round), value.clone());
         }
 
+        self.process_spb_propose(&value, &proof).await?;
         let message = ConsensusMessage::SPBPropose(value.clone(), proof.clone());
         Synchronizer::transmit(
             message,
@@ -485,7 +494,6 @@ impl Core {
         )
         .await?;
 
-        self.process_spb_propose(&value, &proof).await?;
         // Wait for the minimum block delay.
         sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
         Ok(())
@@ -551,7 +559,7 @@ impl Core {
         }
 
         // See if we can vote for this block.
-        if let Some(vote) = self.make_hs_vote(block).await {
+        if let Some(vote) = self.make_opt_vote(block).await {
             debug!("Created hs {:?}", vote);
             /*
             //1. let next_leader = self.leader_elector.get_leader(self.height + 1);
@@ -573,7 +581,7 @@ impl Core {
             // }
             */
             //3. broadcast vote
-            self.handle_hs_vote(&vote).await?;
+            self.handle_opt_vote(&vote).await?;
             let message = ConsensusMessage::HSVote(vote);
             Synchronizer::transmit(
                 message,
@@ -624,7 +632,7 @@ impl Core {
         Ok(())
     }
 
-    async fn handle_hs_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
+    async fn handle_opt_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
         let digest = block.digest();
         if block.epoch < self.epoch {
             return Ok(());
@@ -735,6 +743,11 @@ impl Core {
         if *cur_round > round {
             return false;
         }
+
+        // halt?
+        if *self.smvba_halt_falg.entry((height, round)).or_insert(false) {
+            return false;
+        }
         // let cur_phase = self
         //     .spb_current_phase
         //     .entry((height, round))
@@ -756,6 +769,14 @@ impl Core {
             self.smvba_msg_filter(value.block.epoch, proof.height, proof.round, proof.phase),
             ConsensusError::TimeOutMessage(proof.height, proof.round)
         );
+
+        if *self
+            .spb_abandon_flag
+            .entry((proof.height, proof.round))
+            .or_insert(false)
+        {
+            return Ok(());
+        }
 
         if value.block.epoch > self.epoch {
             self.unhandle_message.push_back((
@@ -786,6 +807,15 @@ impl Core {
             ),
             ConsensusError::TimeOutMessage(spb_vote.height, spb_vote.round)
         );
+
+        if *self
+            .spb_abandon_flag
+            .entry((spb_vote.height, spb_vote.round))
+            .or_insert(false)
+        {
+            return Ok(());
+        }
+
         spb_vote.verify(&self.committee, &self.pk_set)?;
 
         if let Some(proof) = self.aggregator.add_spb_vote(spb_vote.clone())? {
@@ -846,46 +876,8 @@ impl Core {
 
         if weight == self.committee.quorum_threshold() {
             *d_flag = true;
-            let mdone = MDone::new(
-                self.name,
-                self.signature_service.clone(),
-                self.epoch,
-                proof.height,
-                proof.round,
-            )
-            .await;
-
-            let share = RandomnessShare::new(
-                mdone.height,
-                mdone.epoch,
-                mdone.round,
-                self.name,
-                self.signature_service.clone(),
-            )
-            .await;
-
-            self.handle_smvba_done(mdone.clone()).await?;
-            self.handle_smvba_rs(share.clone()).await?;
-
-            let message1 = ConsensusMessage::SPBDone(mdone);
-            Synchronizer::transmit(
-                message1,
-                &self.name,
-                None,
-                &self.network_filter,
-                &self.committee,
-            )
-            .await?;
-
-            let message2 = ConsensusMessage::SMVBACoinShare(share);
-            Synchronizer::transmit(
-                message2,
-                &self.name,
-                None,
-                &self.network_filter,
-                &self.committee,
-            )
-            .await?;
+            self.invoke_done_and_share(proof.height, proof.round)
+                .await?;
         }
 
         Ok(())
@@ -914,66 +906,68 @@ impl Core {
         // d_flag= false and weight == f+1?
         if *d_flag == false && weight == self.committee.random_coin_threshold() {
             *d_flag = true;
-            let mut temp = mdone.clone();
-            temp.author = self.name;
-            let message = ConsensusMessage::SPBDone(temp);
-            Synchronizer::transmit(
-                message,
-                &self.name,
-                None,
-                &self.network_filter,
-                &self.committee,
-            )
-            .await?;
-
             set.insert(self.name);
             weight += 1;
-
-            let share = RandomnessShare::new(
-                mdone.height,
-                mdone.epoch,
-                mdone.round,
-                self.name,
-                self.signature_service.clone(),
-            )
-            .await;
-            self.handle_smvba_rs(share.clone()).await?;
-            let message2 = ConsensusMessage::SMVBACoinShare(share);
-            Synchronizer::transmit(
-                message2,
-                &self.name,
-                None,
-                &self.network_filter,
-                &self.committee,
-            )
-            .await?;
+            self.invoke_done_and_share(mdone.height, mdone.round)
+                .await?;
         }
 
         // 2f+1?
         if weight == self.committee.quorum_threshold() {
-            self.spb_current_phase
-                .insert((mdone.height, mdone.round), FIN_PHASE); //abandon spb message
-
-            // let share = RandomnessShare::new(
-            //     mdone.height,
-            //     mdone.epoch,
-            //     mdone.round,
-            //     self.name,
-            //     self.signature_service.clone(),
-            // )
-            // .await;
-            // let message = ConsensusMessage::SMVBACoinShare(share.clone());
-            // Synchronizer::transmit(
-            //     message,
-            //     &self.name,
-            //     None,
-            //     &self.network_filter,
-            //     &self.committee,
-            // )
-            // .await?;
-            // self.handle_smvba_rs(share).await?;
+            //abandon spb message
+            self.spb_abandon_flag
+                .insert((mdone.height, mdone.round), true);
         }
 
+        Ok(())
+    }
+
+    #[async_recursion]
+    async fn invoke_done_and_share(
+        &mut self,
+        height: SeqNumber,
+        round: SeqNumber,
+    ) -> ConsensusResult<()> {
+        let mdone = MDone::new(
+            self.name,
+            self.signature_service.clone(),
+            self.epoch,
+            height,
+            round,
+        )
+        .await;
+
+        let share = RandomnessShare::new(
+            height,
+            self.epoch,
+            round,
+            self.name,
+            self.signature_service.clone(),
+        )
+        .await;
+
+        self.handle_smvba_done(mdone.clone()).await?;
+        self.handle_smvba_rs(share.clone()).await?;
+
+        let message = ConsensusMessage::SPBDone(mdone);
+        Synchronizer::transmit(
+            message,
+            &self.name,
+            None,
+            &self.network_filter,
+            &self.committee,
+        )
+        .await?;
+
+        let message = ConsensusMessage::SMVBACoinShare(share);
+        Synchronizer::transmit(
+            message,
+            &self.name,
+            None,
+            &self.network_filter,
+            &self.committee,
+        )
+        .await?;
         Ok(())
     }
 
@@ -988,12 +982,12 @@ impl Core {
         prevote.verify(&self.committee, &self.pk_set)?;
         let y_flag = self
             .smvba_y_flag
-            .get_mut(&(prevote.height, prevote.round))
-            .unwrap();
+            .entry((prevote.height, prevote.round))
+            .or_insert(false);
         let n_flag = self
             .smvba_n_flag
-            .get_mut(&(prevote.height, prevote.round))
-            .unwrap();
+            .entry((prevote.height, prevote.round))
+            .or_insert(false);
 
         let mut mvote: Option<MVote> = None;
         if !(*y_flag) && !(*n_flag) {
@@ -1128,7 +1122,8 @@ impl Core {
         {
             return Ok(());
         }
-
+        let height = share.height;
+        let round = share.round;
         if let Some(coin) = self.aggregator.add_smvba_random(share, &self.pk_set)? {
             self.leader_elector.add_random_coin(coin.clone());
 
@@ -1165,13 +1160,16 @@ impl Core {
                     &self.committee,
                 )
                 .await?;
+
+                //halt flag
+                self.smvba_halt_falg.insert((height, round), true);
             } else {
                 let mut pre_vote = MPreVote::new(
                     self.name,
                     leader,
                     self.signature_service.clone(),
-                    coin.round,
-                    coin.height,
+                    round,
+                    height,
                     coin.epoch,
                     PreVoteTag::No(),
                 )
@@ -1194,8 +1192,8 @@ impl Core {
                         self.name,
                         leader,
                         self.signature_service.clone(),
-                        coin.round,
-                        coin.height,
+                        round,
+                        height,
                         coin.epoch,
                         PreVoteTag::Yes(value.clone(), proof.clone()),
                     )
@@ -1682,6 +1680,7 @@ impl Core {
         //如果是悲观路径输出
         if val == 1 {
             //epoch init
+            info!("ABA output 1,epoch {} end", self.epoch);
             return Err(ConsensusError::EpochEnd(self.epoch));
         }
 
@@ -1692,16 +1691,16 @@ impl Core {
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
 
+        self.commit(block.clone()).await?;
         // Cleanup the mempool.
         self.mempool_driver.cleanup_par(block).await;
-
-        self.commit(block.clone()).await?;
         Ok(())
     }
 
     pub async fn run_epoch(&mut self) {
         let mut epoch = 0u64;
         loop {
+            info!("-----Invoke epoch Run {}------", self.epoch);
             self.run().await; //运行当前epoch
             epoch += 1;
             self.epoch_init(epoch);
@@ -1749,12 +1748,12 @@ impl Core {
             let result = tokio::select! {
                 Some(message) = self.core_channel.recv() => {
                     match message {
-                        ConsensusMessage::HsPropose(block) => self.handle_hs_proposal(&block).await,
-                        ConsensusMessage::HSVote(vote) => self.handle_hs_vote(&vote).await,
+                        ConsensusMessage::HsPropose(block) => self.handle_opt_proposal(&block).await,
+                        ConsensusMessage::HSVote(vote) => self.handle_opt_vote(&vote).await,
                         ConsensusMessage::ParABACoinShare(rs) => self.handle_aba_rs(rs).await,
                         ConsensusMessage::HsLoopBack(block) => self.process_opt_block(&block).await,
                         ConsensusMessage::SyncRequest(digest, sender) => self.handle_sync_request(digest, sender).await,
-                        ConsensusMessage::SyncReply(block) => self.handle_hs_proposal(&block).await,
+                        ConsensusMessage::SyncReply(block) => self.handle_opt_proposal(&block).await,
                         ConsensusMessage::SPBPropose(value,proof)=> self.handle_spb_proposal(value,proof).await,
                         ConsensusMessage::SPBVote(vote)=> self.handle_spb_vote(&vote).await,
                         ConsensusMessage::SPBFinsh(value,proof)=> self.handle_spb_finish(value,proof).await,
@@ -1775,13 +1774,12 @@ impl Core {
                 Ok(()) => (),
                 Err(ConsensusError::SerializationError(e)) => error!("Store corrupted. {}", e),
                 Err(ConsensusError::EpochEnd(e)) => {
-                    debug!("epoch {e} end");
+                    info!("-------epoch {e} end--------");
                     return; //ABA输出1 直接退出当前epoch
                 }
                 Err(ConsensusError::TimeOutMessage(..)) => {}
                 Err(e) => {
-                    //warn!("{}", e),
-                    println!("{}", e)
+                    warn!("{}", e)
                 }
             }
         }

@@ -40,7 +40,7 @@ impl Default for Parameters {
             min_block_delay: 100,
             network_delay: 100,
             max_payload_size: 500,
-            ddos: false,
+            ddos: true,
             exp: 1,
         }
     }
@@ -112,10 +112,10 @@ impl Committee {
         (total_votes - 1) / 3 + 1
     }
 
-    pub fn spb_vote_threshold(&self) -> Stake {
-        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        (total_votes - 1) / 3 + 1
-    }
+    // pub fn spb_vote_threshold(&self) -> Stake {
+    //     let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+    //     (total_votes - 1) / 3 + 1
+    // }
 
     pub fn address(&self, name: &PublicKey) -> ConsensusResult<SocketAddr> {
         self.authorities

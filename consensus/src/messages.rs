@@ -235,25 +235,16 @@ pub struct SPBVote {
     pub round: SeqNumber,
     pub proposer: PublicKey,
     pub author: PublicKey,
-    pub signature_share: Option<SignatureShare>,
+    pub signature: Signature,
 }
 
 impl SPBVote {
     pub async fn new(
         value: SPBValue,
         author: PublicKey,
-        mut _signature_service: SignatureService,
+        mut signature_service: SignatureService,
     ) -> Self {
-        // let mut hasher = Sha512::new();
-        // hasher.update(value.digest());
-        // hasher.update(value.phase.to_be_bytes());
-        // let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
-        // let signature_share = signature_service
-        //     .request_tss_signature(digest)
-        //     .await
-        //     .unwrap();
-
-        Self {
+        let mut vote = Self {
             hash: value.digest(),
             phase: value.phase,
             height: value.block.height,
@@ -261,8 +252,10 @@ impl SPBVote {
             round: value.round,
             proposer: value.block.author,
             author,
-            signature_share: None,
-        }
+            signature: Signature::default(),
+        };
+        vote.signature = signature_service.request_signature(vote.digest()).await;
+        return vote;
     }
 
     //验证门限签名是否正确
@@ -272,6 +265,7 @@ impl SPBVote {
             committee.stake(&self.author) > 0,
             ConsensusError::UnknownAuthority(self.author)
         );
+        self.signature.verify(&self.digest(), &self.author)?;
         // let tss_pk = pk_set.public_key_share(committee.id(self.author));
         // // Check the signature.
         // ensure!(
@@ -327,7 +321,7 @@ impl SPBProof {
                 weight += voting_rights;
             }
             ensure!(
-                weight >= committee.spb_vote_threshold(), //f+1
+                weight >= committee.quorum_threshold(), //2f+1
                 ConsensusError::SPBRequiresQuorum
             );
 
@@ -688,7 +682,6 @@ impl Hash for MVote {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(self.author.0);
-        hasher.update(self.leader.0);
         hasher.update(self.round.to_be_bytes());
         hasher.update(self.height.to_le_bytes());
         hasher.update(self.epoch.to_le_bytes());
@@ -767,7 +760,6 @@ impl Hash for MHalt {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(self.author.0);
-        hasher.update(self.leader.0);
         hasher.update(self.round.to_le_bytes());
         hasher.update(self.height.to_le_bytes());
         hasher.update(self.epoch.to_le_bytes());
