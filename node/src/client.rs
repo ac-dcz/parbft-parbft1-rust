@@ -162,6 +162,6 @@ impl Client {
 
         // Then wait for the nodes to be synchronized.
         info!("Waiting for all nodes to be synchronized...");
-        sleep(Duration::from_millis(1000)).await;
+        sleep(Duration::from_millis(2 * self.timeout)).await;
     }
 }

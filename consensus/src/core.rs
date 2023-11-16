@@ -507,7 +507,6 @@ impl Core {
     #[async_recursion]
     async fn process_opt_block(&mut self, block: &Block) -> ConsensusResult<()> {
         debug!("Processing OPT Block {:?}", block);
-        // println!("Processing OPT Block {:?}", block);
 
         // Let's see if we have the last three ancestors of the block, that is:
         //      b0 <- |qc0; b1| <- |qc1; block|
@@ -1373,6 +1372,11 @@ impl Core {
         if *cur_round > round {
             return false;
         }
+
+        if self.aba_output.entry(height).or_insert(None).is_some() {
+            return false;
+        }
+
         true
     }
 
@@ -1381,6 +1385,15 @@ impl Core {
         debug!("Processing {:?}", aba_val);
         aba_val.verify()?;
         if !self.aba_message_filter(aba_val.epoch, aba_val.height, aba_val.round, aba_val.phase) {
+            return Ok(());
+        }
+
+        if self
+            .aba_output
+            .entry(aba_val.height)
+            .or_insert(None)
+            .is_some()
+        {
             return Ok(());
         }
 
@@ -1529,7 +1542,6 @@ impl Core {
             let mut val = coin;
             if mux_vals[0] ^ mux_vals[1] {
                 if mux_vals[coin] {
-                    self.aba_output.entry(self.height).or_insert(Some(coin));
                     //TODO broadcast aba exit message
                     let aba_out = ABAOutput::new(
                         self.name,
@@ -1596,12 +1608,6 @@ impl Core {
         let height = aba_out.height;
         let round = aba_out.round;
 
-        if let Some(val) = self.aba_output.get(&height).unwrap_or(&None) {
-            if *val != aba_out.val {
-                return Ok(());
-            }
-        }
-
         let out_set = self
             .aba_output_messages
             .entry(height)
@@ -1616,6 +1622,7 @@ impl Core {
 
         if nums == self.committee.random_coin_threshold() && !out_set.contains(&self.name) {
             //f+1
+
             let out = ABAOutput::new(
                 self.name,
                 self.epoch,
@@ -1641,6 +1648,9 @@ impl Core {
         }
 
         if nums == self.committee.quorum_threshold() {
+            self.aba_output
+                .entry(self.height)
+                .or_insert(Some(aba_out.val));
             self.handle_par_out(height, aba_out.val).await?;
         }
 
