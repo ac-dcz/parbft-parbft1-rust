@@ -25,6 +25,7 @@ impl Mempool {
         store: Store,
         signature_service: SignatureService,
         consensus_channel: Sender<ConsensusMessage>,
+        consensus_channel_smvba: Sender<ConsensusMessage>,
         consensus_mempool_channel: Receiver<ConsensusMempoolMessage>,
     ) -> MempoolResult<()> {
         info!(
@@ -76,6 +77,7 @@ impl Mempool {
         //用于发送消息
         let synchronizer = Synchronizer::new(
             consensus_channel, //发送LoopBack
+            consensus_channel_smvba,
             store.clone(),
             name,
             committee.clone(),

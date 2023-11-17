@@ -29,6 +29,7 @@ fn spawn_nodes(
             let store = Store::new_default().unwrap();
             // let signature_service = SignatureService::new(secret, None);
             let (tx_consensus, rx_consensus) = channel(10);
+            let (tx_smvba, rx_smvba) = channel(10);
             let (tx_consensus_mempool, rx_consensus_mempool) = channel(1);
             MockMempool::run(rx_consensus_mempool);
             let (tx_commit, mut rx_commit) = channel(1);
@@ -47,6 +48,8 @@ fn spawn_nodes(
                     pk_set,
                     tx_consensus,
                     rx_consensus,
+                    tx_smvba,
+                    rx_smvba,
                     tx_consensus_mempool,
                     tx_commit,
                     Protocol::HotStuffAndSMVBA,

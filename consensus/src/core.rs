@@ -74,7 +74,10 @@ pub struct Core {
     synchronizer: Synchronizer,
     core_channel: Receiver<ConsensusMessage>,
     tx_core: Sender<ConsensusMessage>,
+    smvba_channel: Receiver<ConsensusMessage>,
+    tx_smvba: Sender<ConsensusMessage>,
     network_filter: Sender<FilterInput>,
+    network_filter_smvba: Sender<FilterInput>,
     commit_channel: Sender<Block>,
     height: SeqNumber, // current height
     epoch: SeqNumber,  // current epoch
@@ -112,7 +115,6 @@ pub struct Core {
     aba_output_messages: HashMap<SeqNumber, HashSet<PublicKey>>,
     par_value_wait: HashMap<SeqNumber, [bool; 2]>,
 }
-
 impl Core {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -127,7 +129,10 @@ impl Core {
         synchronizer: Synchronizer,
         core_channel: Receiver<ConsensusMessage>,
         tx_core: Sender<ConsensusMessage>,
+        smvba_channel: Receiver<ConsensusMessage>,
+        tx_smvba: Sender<ConsensusMessage>,
         network_filter: Sender<FilterInput>,
+        network_filter_smvba: Sender<FilterInput>,
         commit_channel: Sender<Block>,
         opt_path: bool,
         pes_path: bool,
@@ -144,9 +149,12 @@ impl Core {
             mempool_driver,
             synchronizer,
             network_filter,
+            network_filter_smvba,
             commit_channel,
             core_channel,
             tx_core,
+            smvba_channel,
+            tx_smvba,
             height: 1,
             epoch: 0,
             last_voted_height: 0,
@@ -366,17 +374,13 @@ impl Core {
             // Process the QC.
             self.process_qc(&qc).await;
 
-            let block = self.generate_proposal().await;
+            let mut block = None;
+            if self.pes_path || self.name == self.leader_elector.get_leader(self.height) {
+                block = Some(self.generate_proposal().await);
+            }
             // Make a new block if we are the next leader.
             if self.name == self.leader_elector.get_leader(self.height) {
-                // if self.height > 1 {
-                //     self.synchronizer
-                // }
-                // if self.height > 2 {
-                //     self.terminate_smvba(self.height - 2).await?;
-                // }
-
-                self.broadcast_opt_propose(block.clone()).await?;
+                self.broadcast_opt_propose(block.clone().unwrap()).await?;
             }
 
             if self.pes_path {
@@ -388,7 +392,7 @@ impl Core {
                     round: round.clone(),
                     shares: Vec::new(),
                 };
-                self.broadcast_pes_propose(block, proof).await?;
+                self.broadcast_pes_propose(block.unwrap(), proof).await?;
             }
         }
         Ok(())
@@ -449,6 +453,7 @@ impl Core {
             None,
             &self.network_filter,
             &self.committee,
+            OPT,
         )
         .await?;
 
@@ -475,8 +480,9 @@ impl Core {
             message,
             &self.name,
             None,
-            &self.network_filter,
+            &self.network_filter_smvba,
             &self.committee,
+            PES,
         )
         .await?;
 
@@ -492,8 +498,8 @@ impl Core {
 
     #[async_recursion]
     async fn process_opt_block(&mut self, block: &Block) -> ConsensusResult<()> {
-        debug!("Processing OPT Block {:?}", block);
-
+        // debug!("Processing OPT Block {:?}", block);
+        println!("Processing OPT Block {:?}", block);
         // Let's see if we have the last three ancestors of the block, that is:
         //      b0 <- |qc0; b1| <- |qc1; block|
         // If we don't, the synchronizer asks for them to other nodes. It will
@@ -507,6 +513,22 @@ impl Core {
                 return Ok(());
             }
         };
+
+        //TODO:
+        // 1. 对 height-1 的 block 发送 prepare-opt
+        if self.pes_path && block.height > 1 {
+            self.active_prepare_pahse(
+                block.height - 1,
+                &b1,                                 // Block h-1
+                PrePareProof::OPT(block.qc.clone()), //qc h-1
+                OPT,
+            )
+            .await?;
+        }
+        // 2. 终止 height-2 的 SMVBA
+        if self.pes_path && self.height > 2 {
+            self.terminate_smvba(self.height - 2).await?;
+        }
 
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
@@ -532,21 +554,6 @@ impl Core {
                 warn!("Failed to send block through the commit channel: {}", e);
             }
         }
-        //TODO:
-        // 1. 对 height-1 的 block 发送 prepare-opt
-        if self.pes_path && block.height > 1 {
-            self.active_prepare_pahse(
-                block.height - 1,
-                &b1,                                 // Block h-1
-                PrePareProof::OPT(block.qc.clone()), //qc h-1
-                OPT,
-            )
-            .await?;
-        }
-        // 2. 终止 height-2 的 SMVBA
-        if self.pes_path && self.height > 2 {
-            self.terminate_smvba(self.height - 2).await?;
-        }
 
         // Ensure the block's round is as expected.
         // This check is important: it prevents bad leaders from producing blocks
@@ -558,25 +565,6 @@ impl Core {
         // See if we can vote for this block.
         if let Some(vote) = self.make_opt_vote(block).await {
             debug!("Created hs {:?}", vote);
-            /*
-            //1. let next_leader = self.leader_elector.get_leader(self.height + 1);
-
-            //2. send current leader
-            // let cur_leader = self.leader_elector.get_leader(self.height);
-            // if cur_leader == self.name {
-            //     self.handle_vote(&vote).await?;
-            // } else {
-            //     let message = ConsensusMessage::HSVote(vote);
-            //     Synchronizer::transmit(
-            //         message,
-            //         &self.name,
-            //         Some(&cur_leader),
-            //         &self.network_filter,
-            //         &self.committee,
-            //     )
-            //     .await?;
-            // }
-            */
             //3. broadcast vote
             self.handle_opt_vote(&vote).await?;
             let message = ConsensusMessage::HSVote(vote);
@@ -586,6 +574,7 @@ impl Core {
                 None,
                 &self.network_filter,
                 &self.committee,
+                OPT,
             )
             .await?;
         }
@@ -599,7 +588,7 @@ impl Core {
         proof: &SPBProof,
     ) -> ConsensusResult<()> {
         debug!("Processing PES Block {:?}", value.block);
-        // println!("Processing PES Block {:?}", value.block);
+        println!("Processing PES Block {:?}", value.block);
         //如果是lock 阶段 保存
         if value.phase == LOCK_PHASE {
             self.spb_locks
@@ -618,8 +607,9 @@ impl Core {
                     message,
                     &self.name,
                     Some(&value.block.author),
-                    &self.network_filter,
+                    &self.network_filter_smvba,
                     &self.committee,
+                    PES,
                 )
                 .await?;
             } else {
@@ -690,8 +680,9 @@ impl Core {
             message,
             &self.name,
             None,
-            &self.network_filter,
+            &self.network_filter_smvba,
             &self.committee,
+            PES,
         )
         .await?;
         self.handle_par_prepare(prepare).await?;
@@ -717,6 +708,7 @@ impl Core {
                 Some(&sender),
                 &self.network_filter,
                 &self.committee,
+                OPT,
             )
             .await?;
         }
@@ -767,20 +759,20 @@ impl Core {
             ConsensusError::TimeOutMessage(proof.height, proof.round)
         );
 
-        if *self
-            .spb_abandon_flag
-            .entry((proof.height, proof.round))
-            .or_insert(false)
-        {
-            return Ok(());
-        }
-
         if value.block.epoch > self.epoch {
             self.unhandle_message.push_back((
                 value.block.epoch,
                 ConsensusMessage::SPBPropose(value, proof),
             ));
             return Err(ConsensusError::EpochEnd(self.epoch));
+        }
+
+        if *self
+            .spb_abandon_flag
+            .entry((proof.height, proof.round))
+            .or_insert(false)
+        {
+            return Ok(());
         }
 
         //验证Proof是否正确
@@ -793,7 +785,6 @@ impl Core {
     #[async_recursion]
     async fn handle_spb_vote(&mut self, spb_vote: &SPBVote) -> ConsensusResult<()> {
         debug!("Processing {:?}", spb_vote);
-
         //check message is timeout?
         ensure!(
             self.smvba_msg_filter(
@@ -832,8 +823,9 @@ impl Core {
                     message,
                     &self.name,
                     None,
-                    &self.network_filter,
+                    &self.network_filter_smvba,
                     &self.committee,
+                    PES,
                 )
                 .await?;
                 self.handle_spb_finish(value.clone(), proof).await?;
@@ -850,7 +842,9 @@ impl Core {
             self.smvba_msg_filter(value.block.epoch, proof.height, proof.round, proof.phase),
             ConsensusError::TimeOutMessage(proof.height, proof.round)
         );
+
         value.verify(&self.committee, &proof, &self.pk_set)?;
+
         let d_flag = self
             .smvba_d_flag
             .entry((proof.height, proof.round))
@@ -887,7 +881,9 @@ impl Core {
             self.smvba_msg_filter(mdone.epoch, mdone.height, mdone.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(mdone.height, mdone.round)
         );
+
         mdone.verify()?;
+
         let d_flag = self
             .smvba_d_flag
             .entry((mdone.height, mdone.round))
@@ -951,8 +947,9 @@ impl Core {
             message,
             &self.name,
             None,
-            &self.network_filter,
+            &self.network_filter_smvba,
             &self.committee,
+            PES,
         )
         .await?;
 
@@ -961,22 +958,24 @@ impl Core {
             message,
             &self.name,
             None,
-            &self.network_filter,
+            &self.network_filter_smvba,
             &self.committee,
+            PES,
         )
         .await?;
         Ok(())
     }
 
     async fn handle_smvba_prevote(&mut self, prevote: MPreVote) -> ConsensusResult<()> {
-        // debug!("Processing  {:?}", prevote);
-        println!("Processing  {:?}", prevote);
+        debug!("Processing  {:?}", prevote);
+        // println!("Processing  {:?}", prevote);
         ensure!(
             self.smvba_msg_filter(prevote.epoch, prevote.height, prevote.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(prevote.height, prevote.round)
         );
 
         prevote.verify(&self.committee, &self.pk_set)?;
+
         let y_flag = self
             .smvba_y_flag
             .entry((prevote.height, prevote.round))
@@ -1039,8 +1038,9 @@ impl Core {
                 message,
                 &self.name,
                 None,
-                &self.network_filter,
+                &self.network_filter_smvba,
                 &self.committee,
+                PES,
             )
             .await?;
             self.handle_smvba_mvote(vote).await?;
@@ -1050,14 +1050,15 @@ impl Core {
     }
 
     async fn handle_smvba_mvote(&mut self, mvote: MVote) -> ConsensusResult<()> {
-        // debug!("Processing  {:?}", mvote);
-        println!("Processing  {:?}", mvote);
+        debug!("Processing  {:?}", mvote);
+        // println!("Processing  {:?}", mvote);
         ensure!(
             self.smvba_msg_filter(mvote.epoch, mvote.height, mvote.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(mvote.height, mvote.round)
         );
 
         mvote.verify(&self.committee, &self.pk_set)?;
+
         let set = self
             .smvba_votes
             .entry((mvote.height, mvote.round))
@@ -1085,8 +1086,9 @@ impl Core {
                         message,
                         &self.name,
                         None,
-                        &self.network_filter,
+                        &self.network_filter_smvba,
                         &self.committee,
+                        PES,
                     )
                     .await?;
                     return Ok(());
@@ -1110,6 +1112,7 @@ impl Core {
             self.smvba_msg_filter(share.epoch, share.height, share.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(share.height, share.round)
         );
+
         share.verify(&self.committee, &self.pk_set)?;
 
         if self
@@ -1153,8 +1156,9 @@ impl Core {
                     message,
                     &self.name,
                     None,
-                    &self.network_filter,
+                    &self.network_filter_smvba,
                     &self.committee,
+                    PES,
                 )
                 .await?;
 
@@ -1201,8 +1205,9 @@ impl Core {
                     message,
                     &self.name,
                     None,
-                    &self.network_filter,
+                    &self.network_filter_smvba,
                     &self.committee,
+                    PES,
                 )
                 .await?;
                 self.handle_smvba_prevote(pre_vote).await?;
@@ -1225,6 +1230,7 @@ impl Core {
         {
             return Ok(());
         }
+
         halt.verify(&self.committee, &self.pk_set)?;
 
         //smvba end -> send pes-prepare
@@ -1265,6 +1271,8 @@ impl Core {
         if prepare.epoch != self.epoch || prepare.height + 2 <= self.height {
             return Ok(());
         }
+
+        // prepare.verify(&self.committee, &self.pk_set)?;
 
         let opt_set = self
             .par_prepare_opts
@@ -1340,8 +1348,9 @@ impl Core {
                 message,
                 &self.name,
                 None,
-                &self.network_filter,
+                &self.network_filter_smvba,
                 &self.committee,
+                PES,
             )
             .await?;
         }
@@ -1381,6 +1390,7 @@ impl Core {
     #[async_recursion]
     async fn handle_aba_val(&mut self, aba_val: ABAVal) -> ConsensusResult<()> {
         debug!("Processing {:?}", aba_val);
+
         aba_val.verify()?;
         if !self.aba_message_filter(aba_val.epoch, aba_val.height, aba_val.round, aba_val.phase) {
             return Ok(());
@@ -1416,6 +1426,8 @@ impl Core {
             if temp_vals[aba_val.val] == self.committee.random_coin_threshold() //f+1
                 && !used.contains(&self.name)
             {
+                used.insert(self.name);
+                temp_vals[aba_val.val] += 1;
                 let val_t = ABAVal::new(
                     self.name,
                     self.epoch,
@@ -1431,12 +1443,11 @@ impl Core {
                     message,
                     &self.name,
                     None,
-                    &self.network_filter,
+                    &self.network_filter_smvba,
                     &self.committee,
+                    PES,
                 )
                 .await?;
-                used.insert(self.name);
-                temp_vals[aba_val.val] += 1;
             }
 
             if temp_vals[aba_val.val] == self.committee.quorum_threshold() {
@@ -1459,8 +1470,9 @@ impl Core {
                     message,
                     &self.name,
                     None,
-                    &self.network_filter,
+                    &self.network_filter_smvba,
                     &self.committee,
+                    PES,
                 )
                 .await?;
                 self.handle_aba_val(mux).await?;
@@ -1508,8 +1520,9 @@ impl Core {
                     message,
                     &self.name,
                     None,
-                    &self.network_filter,
+                    &self.network_filter_smvba,
                     &self.committee,
+                    PES,
                 )
                 .await?;
 
@@ -1556,8 +1569,9 @@ impl Core {
                         message,
                         &self.name,
                         None,
-                        &self.network_filter,
+                        &self.network_filter_smvba,
                         &self.committee,
+                        PES,
                     )
                     .await?;
 
@@ -1583,8 +1597,9 @@ impl Core {
                 message,
                 &self.name,
                 None,
-                &self.network_filter,
+                &self.network_filter_smvba,
                 &self.committee,
+                PES,
             )
             .await?;
 
@@ -1636,8 +1651,9 @@ impl Core {
                 message,
                 &self.name,
                 None,
-                &self.network_filter,
+                &self.network_filter_smvba,
                 &self.committee,
+                PES,
             )
             .await?;
 
@@ -1702,12 +1718,12 @@ impl Core {
             if let Err(e) = self.commit_channel.send(block.clone()).await {
                 warn!("Failed to send block through the commit channel: {}", e);
             }
-        }
-
-        if tag == PES {
-            //如果是悲观路径输出
-            info!("ABA output 1,epoch {} end", self.epoch);
-            return Err(ConsensusError::EpochEnd(self.epoch));
+            if tag == PES {
+                //如果是悲观路径输出
+                info!("ABA output 1,epoch {} end", self.epoch);
+                // print!("ABA output 1,epoch {} end", self.epoch);
+                return Err(ConsensusError::EpochEnd(self.epoch));
+            }
         }
 
         self.mempool_driver.cleanup_par(block).await;
@@ -1725,8 +1741,18 @@ impl Core {
             while !self.unhandle_message.is_empty() {
                 if let Some((e, msg)) = self.unhandle_message.pop_front() {
                     if e == self.epoch {
-                        if let Err(e) = self.tx_core.send(msg).await {
-                            panic!("Failed to send block through network channel: {}", e);
+                        match msg {
+                            ConsensusMessage::HsPropose(..) => {
+                                if let Err(e) = self.tx_core.send(msg).await {
+                                    panic!("Failed to send last epoch message: {}", e);
+                                }
+                            }
+                            ConsensusMessage::SPBPropose(..) => {
+                                if let Err(e) = self.tx_smvba.send(msg).await {
+                                    panic!("Failed to send last epoch message: {}", e);
+                                }
+                            }
+                            _ => break,
                         }
                     }
                 }
@@ -1761,16 +1787,21 @@ impl Core {
 
         // This is the main loop: it processes incoming blocks and votes,
         // and receive timeout notifications from our Timeout Manager.
+
         loop {
             let result = tokio::select! {
                 Some(message) = self.core_channel.recv() => {
                     match message {
                         ConsensusMessage::HsPropose(block) => self.handle_opt_proposal(&block).await,
                         ConsensusMessage::HSVote(vote) => self.handle_opt_vote(&vote).await,
-                        ConsensusMessage::ParABACoinShare(rs) => self.handle_aba_rs(rs).await,
                         ConsensusMessage::HsLoopBack(block) => self.process_opt_block(&block).await,
                         ConsensusMessage::SyncRequest(digest, sender) => self.handle_sync_request(digest, sender).await,
                         ConsensusMessage::SyncReply(block) => self.handle_opt_proposal(&block).await,
+                        _=> Ok(()),
+                    }
+                },
+                Some(message) = self.smvba_channel.recv() => {
+                    match message {
                         ConsensusMessage::SPBPropose(value,proof)=> self.handle_spb_proposal(value,proof).await,
                         ConsensusMessage::SPBVote(vote)=> self.handle_spb_vote(&vote).await,
                         ConsensusMessage::SPBFinsh(value,proof)=> self.handle_spb_finish(value,proof).await,
@@ -1783,6 +1814,8 @@ impl Core {
                         ConsensusMessage::ParABAVal(aba_val) => self.handle_aba_val(aba_val).await,
                         ConsensusMessage::ParABAOutput(aba_out) => self.handle_aba_output(aba_out).await,
                         ConsensusMessage::ParLoopBack(block) => self.process_par_out(&block).await,
+                        ConsensusMessage::ParABACoinShare(rs) => self.handle_aba_rs(rs).await,
+                        _=> Ok(()),
                     }
                 },
                 else => break,
@@ -1792,6 +1825,7 @@ impl Core {
                 Err(ConsensusError::SerializationError(e)) => error!("Store corrupted. {}", e),
                 Err(ConsensusError::EpochEnd(e)) => {
                     info!("-------epoch {e} end--------");
+                    print!("-------epoch {e} end--------");
                     return; //ABA输出1 直接退出当前epoch
                 }
                 Err(ConsensusError::TimeOutMessage(..)) => {}

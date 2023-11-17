@@ -43,7 +43,7 @@ impl Node {
         let (tx_commit, rx_commit) = channel(10000); //commit channel
         let (tx_consensus, rx_consensus) = channel(10000); // 协议交流消息
         let (tx_consensus_mempool, rx_consensus_mempool) = channel(10000);
-
+        let (tx_smvba, rx_smvba) = channel(10000);
         // Read the committee and secret key from file.
         let committee = Committee::read(committee_file)?;
         info!("committee {:?}", committee);
@@ -85,6 +85,7 @@ impl Node {
             store.clone(),
             signature_service.clone(),
             tx_consensus.clone(), //LOOPBACK
+            tx_smvba.clone(),
             rx_consensus_mempool, //Get ,Verify,Clean
         )?;
 
@@ -98,6 +99,8 @@ impl Node {
             pk_set,
             tx_consensus,
             rx_consensus,
+            tx_smvba,
+            rx_smvba,
             tx_consensus_mempool,
             tx_commit,
             protocol,

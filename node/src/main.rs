@@ -140,7 +140,8 @@ fn deploy_testbed(nodes: usize) -> Result<Vec<JoinHandle<()>>, Box<dyn std::erro
                 let name = key.name;
                 let stake = 1;
                 let addresses = format!("127.0.0.1:{}", 7200 + i).parse().unwrap();
-                (name, 0, stake, addresses) // daniel: not implemented for tss yet
+                let smvba_addresses = format!("127.0.0.1:{}", 7300 + i).parse().unwrap();
+                (name, 0, stake, addresses, smvba_addresses) // daniel: not implemented for tss yet
             })
             .collect(),
         epoch,

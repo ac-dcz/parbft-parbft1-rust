@@ -31,8 +31,8 @@ class TSSKey:
         return cls(data['id'], data['name'], data['secret'])
 
 class Committee:
-    def __init__(self, names, ids, consensus_addr, front_addr, mempool_addr):
-        inputs = [names, consensus_addr, front_addr, mempool_addr]
+    def __init__(self, names, ids, consensus_addr,smvba_addr ,front_addr, mempool_addr):
+        inputs = [names, consensus_addr, smvba_addr,front_addr, mempool_addr]
         assert all(isinstance(x, list) for x in inputs)
         assert all(isinstance(x, str) for y in inputs for x in y)
         assert len({len(x) for x in inputs}) == 1
@@ -42,6 +42,7 @@ class Committee:
         self.consensus = consensus_addr
         self.front = front_addr
         self.mempool = mempool_addr
+        self.smvba = smvba_addr
 
         self.json = {
             'consensus': self._build_consensus(),
@@ -50,8 +51,8 @@ class Committee:
 
     def _build_consensus(self):
         node = {}
-        for a, n, id in zip(self.consensus, self.names, self.ids):
-            node[n] = {'name': n, 'stake': 1, 'address': a, 'id': id}
+        for a, b, n, id in zip(self.consensus, self.smvba, self.names, self.ids):
+            node[n] = {'name': n, 'stake': 1, 'address': a, 'smvba_address': b,'id': id}
         return {'authorities': node, 'epoch': 1}
 
     def _build_mempool(self):
@@ -91,9 +92,10 @@ class LocalCommittee(Committee):
         assert isinstance(port, int)
         size = len(names)
         consensus = [f'127.0.0.1:{port + i}' for i in range(size)]
-        front = [f'127.0.0.1:{port + i + size}' for i in range(size)]
-        mempool = [f'127.0.0.1:{port + i + 2*size}' for i in range(size)]
-        super().__init__(names, ids, consensus, front, mempool)
+        smvba = [f'127.0.0.1:{port + i + size}' for i in range(size)]
+        front = [f'127.0.0.1:{port + i + 2*size}' for i in range(size)]
+        mempool = [f'127.0.0.1:{port + i + 3*size}' for i in range(size)]
+        super().__init__(names, ids, consensus, smvba, front, mempool)
 
 
 class NodeParameters:

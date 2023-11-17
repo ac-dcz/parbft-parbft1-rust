@@ -31,6 +31,8 @@ impl Consensus {
         pk_set: PublicKeySet, // The set of tss public keys
         tx_core: Sender<ConsensusMessage>,
         rx_core: Receiver<ConsensusMessage>,
+        tx_smvba: Sender<ConsensusMessage>,
+        rx_smvba: Receiver<ConsensusMessage>,
         tx_consensus_mempool: Sender<ConsensusMempoolMessage>,
         tx_commit: Sender<Block>,
         protocol: Protocol,
@@ -53,7 +55,9 @@ impl Consensus {
         );
 
         let (tx_network, rx_network) = channel(10000);
+        let (tx_net_smvba, rx_net_smvba) = channel(10000);
         let (tx_filter, rx_filter) = channel(10000);
+        let (tx_filter_smvba, rx_filter_smvba) = channel(10000);
 
         // Make the network sender and receiver.
         let address = committee.address(&name).map(|mut x| {
@@ -65,9 +69,23 @@ impl Consensus {
             network_receiver.run().await;
         });
 
+        let smvba_address = committee.smvba_address(&name).map(|mut x| {
+            x.set_ip("0.0.0.0".parse().unwrap());
+            x
+        })?;
+        let smvba_receiver = NetReceiver::new(smvba_address, tx_smvba.clone());
+        tokio::spawn(async move {
+            smvba_receiver.run().await;
+        });
+
         let mut network_sender = NetSender::new(rx_network);
         tokio::spawn(async move {
             network_sender.run().await;
+        });
+
+        let mut network_sender_smvba = NetSender::new(rx_net_smvba);
+        tokio::spawn(async move {
+            network_sender_smvba.run().await;
         });
 
         // The leader elector algorithm.
@@ -77,7 +95,13 @@ impl Consensus {
         let mempool_driver = MempoolDriver::new(tx_consensus_mempool);
 
         // Custom filter to arbitrary delay network messages.
-        Filter::run(rx_filter, tx_network, parameters.clone()); //对消息进行延迟
+        Filter::run(
+            rx_filter,
+            rx_filter_smvba,
+            tx_network,
+            tx_net_smvba,
+            parameters.clone(),
+        ); //对消息进行延迟
 
         // Make the synchronizer. This instance runs in a background thread
         // and asks other nodes for any block that we may be missing.
@@ -106,7 +130,10 @@ impl Consensus {
                     synchronizer,
                     /* core_channel */ rx_core,
                     tx_core,
+                    rx_smvba,
+                    tx_smvba,
                     /* network_filter */ tx_filter,
+                    tx_filter_smvba,
                     /* commit_channel */ tx_commit,
                     true,
                     false,
@@ -129,7 +156,10 @@ impl Consensus {
                     synchronizer,
                     /* core_channel */ rx_core,
                     tx_core,
+                    rx_smvba,
+                    tx_smvba,
                     /* network_filter */ tx_filter,
+                    tx_filter_smvba,
                     /* commit_channel */ tx_commit,
                     true,
                     true,
@@ -152,7 +182,10 @@ impl Consensus {
                     synchronizer,
                     /* core_channel */ rx_core,
                     tx_core,
+                    rx_smvba,
+                    tx_smvba,
                     /* network_filter */ tx_filter,
+                    tx_filter_smvba,
                     /* commit_channel */ tx_commit,
                     false,
                     true,

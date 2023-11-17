@@ -10,10 +10,11 @@ use rand::RngCore as _;
 use rand::SeedableRng as _;
 use tokio::sync::mpsc::Receiver;
 
+const NODES: usize = 4;
 // Fixture.
 pub fn keys() -> Vec<(PublicKey, SecretKey)> {
     let mut rng = StdRng::from_seed([0; 32]);
-    (0..4).map(|_| generate_keypair(&mut rng)).collect()
+    (0..NODES).map(|_| generate_keypair(&mut rng)).collect()
 }
 
 // Fixture.
@@ -23,9 +24,10 @@ pub fn committee() -> Committee {
             .into_iter()
             .enumerate()
             .map(|(i, (name, _))| {
-                let address = format!("127.0.0.1:{}", i).parse().unwrap();
+                let address = format!("0.0.0.0:{}", i).parse().unwrap();
+                let smvba_address = format!("0.0.0.0:{}", 100 + i).parse().unwrap();
                 let stake = 1;
-                (name, 0, stake, address)
+                (name, 0, stake, address, smvba_address)
             })
             .collect(),
         /* epoch */ 1,
@@ -36,7 +38,9 @@ impl Committee {
     pub fn increment_base_port(&mut self, base_port: u16) {
         for authority in self.authorities.values_mut() {
             let port = authority.address.port();
+            let port_s = authority.smvba_address.port();
             authority.address.set_port(base_port + port);
+            authority.smvba_address.set_port(base_port + port_s);
         }
     }
 }

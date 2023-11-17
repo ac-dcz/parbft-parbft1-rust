@@ -52,6 +52,7 @@ pub struct Authority {
     pub id: usize, // id of the node in the tss public key share set
     pub stake: Stake,
     pub address: SocketAddr,
+    pub smvba_address: SocketAddr,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -61,16 +62,20 @@ pub struct Committee {
 }
 
 impl Committee {
-    pub fn new(info: Vec<(PublicKey, usize, Stake, SocketAddr)>, epoch: EpochNumber) -> Self {
+    pub fn new(
+        info: Vec<(PublicKey, usize, Stake, SocketAddr, SocketAddr)>,
+        epoch: EpochNumber,
+    ) -> Self {
         Self {
             authorities: info
                 .into_iter()
-                .map(|(name, id, stake, address)| {
+                .map(|(name, id, stake, address, smvba_address)| {
                     let authority = Authority {
                         name,
                         id,
                         stake,
                         address,
+                        smvba_address,
                     };
                     (name, authority)
                 })
@@ -124,11 +129,26 @@ impl Committee {
             .ok_or_else(|| ConsensusError::NotInCommittee(*name))
     }
 
+    pub fn smvba_address(&self, name: &PublicKey) -> ConsensusResult<SocketAddr> {
+        self.authorities
+            .get(name)
+            .map(|x| x.smvba_address)
+            .ok_or_else(|| ConsensusError::NotInCommittee(*name))
+    }
+
     pub fn broadcast_addresses(&self, myself: &PublicKey) -> Vec<SocketAddr> {
         self.authorities
             .values()
             .filter(|x| x.name != *myself)
             .map(|x| x.address)
+            .collect()
+    }
+
+    pub fn smvba_broadcast_addresses(&self, myself: &PublicKey) -> Vec<SocketAddr> {
+        self.authorities
+            .values()
+            .filter(|x| x.name != *myself)
+            .map(|x| x.smvba_address)
             .collect()
     }
 }

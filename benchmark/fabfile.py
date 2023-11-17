@@ -16,7 +16,7 @@ def local(ctx):
         'rate': 1000,
         'tx_size': 512,
         'faults': 0,
-        'duration': 10,
+        'duration': 20,
     }
     node_params = {
         'consensus': {
@@ -24,7 +24,7 @@ def local(ctx):
             'sync_retry_delay': 10_000,
             'max_payload_size': 500,
             'min_block_delay': 0,
-            'network_delay': 2000, # message delay on the leaders' proposals during DDoS
+            'network_delay': 1000, # message delay on the leaders' proposals during DDoS
             'ddos': True, # True for DDoS attack on the leader, False otherwise
             'exp': 1 # multiplicative factor for exponential fallback
         },

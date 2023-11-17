@@ -3,6 +3,7 @@ use crate::core::ConsensusMessage;
 use crate::error::ConsensusResult;
 use crate::filter::FilterInput;
 use crate::messages::{Block, QC};
+use crate::OPT;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use futures::stream::futures_unordered::FuturesUnordered;
@@ -60,7 +61,7 @@ impl Synchronizer {
                                     .as_millis();
                                 requests.insert(parent.clone(), now);
                                 let message = ConsensusMessage::SyncRequest(parent, name);
-                                Self::transmit(message, &name, None, &network_filter, &committee).await.unwrap();
+                                Self::transmit(message, &name, None, &network_filter, &committee,OPT).await.unwrap();
                             }
                         }
                     },
@@ -86,7 +87,7 @@ impl Synchronizer {
                             if timestamp + (sync_retry_delay as u128) < now {
                                 debug!("Requesting sync for block {} (retry)", digest);
                                 let message = ConsensusMessage::SyncRequest(digest.clone(), name);
-                                Self::transmit(message, &name, None, &network_filter, &committee).await.unwrap();
+                                Self::transmit(message, &name, None, &network_filter, &committee,OPT).await.unwrap();
                             }
                         }
                         timer.as_mut().reset(Instant::now() + Duration::from_millis(TIMER_ACCURACY));
@@ -112,13 +113,22 @@ impl Synchronizer {
         to: Option<&PublicKey>,
         network_filter: &Sender<FilterInput>,
         committee: &Committee,
+        tag: u8,
     ) -> ConsensusResult<()> {
         let addresses = if let Some(to) = to {
             debug!("Sending {:?} to {}", message, to);
-            vec![committee.address(to)?]
+            if tag == OPT {
+                vec![committee.address(to)?]
+            } else {
+                vec![committee.smvba_address(to)?]
+            }
         } else {
             debug!("Broadcasting {:?}", message);
-            committee.broadcast_addresses(from)
+            if tag == OPT {
+                committee.broadcast_addresses(from)
+            } else {
+                committee.smvba_broadcast_addresses(from)
+            }
         };
         if let Err(e) = network_filter.send((message, addresses)).await {
             panic!("Failed to send block through network channel: {}", e);

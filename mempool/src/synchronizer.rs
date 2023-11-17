@@ -33,6 +33,7 @@ pub struct Synchronizer {
 impl Synchronizer {
     pub fn new(
         consensus_channel: Sender<ConsensusMessage>,
+        consensus_channel_smvba: Sender<ConsensusMessage>,
         store: Store,
         name: PublicKey,
         committee: Committee,
@@ -112,15 +113,18 @@ impl Synchronizer {
                                 for x in &block.payload {//将已经收到的payload去除
                                     let _ = requests.remove(x);
                                 }
-                                let message;
                                 if tag == OPT{
-                                    message = ConsensusMessage::HsLoopBack(block);
+                                    let message = ConsensusMessage::HsLoopBack(block);
+                                    if let Err(e) = consensus_channel.send(message).await {
+                                        panic!("Failed to send message to consensus: {}", e);
+                                    }
                                 }else{
-                                    message = ConsensusMessage::ParLoopBack(block)
+                                    let message = ConsensusMessage::ParLoopBack(block);
+                                    if let Err(e) = consensus_channel_smvba.send(message).await {
+                                        panic!("Failed to send message to consensus: {}", e);
+                                    }
                                 }
-                                if let Err(e) = consensus_channel.send(message).await {
-                                    panic!("Failed to send message to consensus: {}", e);
-                                }
+
                             },
                             Ok((None,_)) => (),
                             Err(e) => error!("{}", e)

@@ -35,6 +35,7 @@ async fn end_to_end() {
             let _ = fs::remove_dir_all(&store_path);
             let store = Store::new_default().unwrap();
             let (tx_consensus, _rx_consensus) = channel(1);
+            let (tx_consensus_smvba, _rx_consensus) = channel(1);
             let (tx_consensus_mempool, rx_consensus_mempool) = channel(1);
 
             tokio::spawn(async move {
@@ -45,6 +46,7 @@ async fn end_to_end() {
                     store,
                     signature_service,
                     tx_consensus,
+                    tx_consensus_smvba,
                     rx_consensus_mempool,
                 )
                 .unwrap();

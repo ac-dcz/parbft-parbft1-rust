@@ -126,6 +126,7 @@ impl Core {
         // Share the payload with all other nodes.
         let message = MempoolMessage::Payload(payload); //向其他节点发送这个payload
         self.transmit(&message, None).await
+        // Ok(())
     }
 
     async fn handle_own_payload(&mut self, payload: Payload) -> MempoolResult<()> {

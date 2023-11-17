@@ -12,10 +12,13 @@ async fn core(
 ) -> (
     Sender<ConsensusMessage>,
     Receiver<FilterInput>,
+    Receiver<FilterInput>,
     Receiver<Block>,
 ) {
     let (tx_core, rx_core) = channel(1);
+    let (tx_smvba, rx_smvba) = channel(1);
     let (tx_network, rx_network) = channel(3);
+    let (tx_network_smvba, rx_network_smvba) = channel(3);
     let (tx_consensus_mempool, rx_consensus_mempool) = channel(1);
     let (tx_commit, rx_commit) = channel(1);
 
@@ -50,7 +53,10 @@ async fn core(
         synchronizer,
         /* core_channel */ rx_core,
         tx_core.clone(),
+        rx_smvba,
+        tx_smvba.clone(),
         /* network_channel */ tx_network,
+        tx_network_smvba,
         /* commit_channel */ tx_commit,
         true,
         false,
@@ -58,7 +64,7 @@ async fn core(
     tokio::spawn(async move {
         core.run().await;
     });
-    (tx_core, rx_network, rx_commit)
+    (tx_core, rx_network, rx_network_smvba, rx_commit)
 }
 
 fn leader_keys(height: SeqNumber) -> (PublicKey, SecretKey) {
@@ -87,7 +93,7 @@ async fn handle_proposal() {
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
-    let (tx_core, mut rx_network, _rx_commit) =
+    let (tx_core, mut rx_network, mut _rx_network_smvba, _rx_commit) =
         core(public_key, secret_key, store_path, pk_set).await;
 
     // Send a block to the core.
@@ -147,7 +153,7 @@ async fn generate_proposal() {
     let pk_set = tss_keys.pkset.clone();
     // Run a core instance.
     let store_path = ".db_test_generate_proposal";
-    let (tx_core, mut rx_network, _rx_commit) =
+    let (tx_core, mut rx_network, mut _rx_network_smvba, _rx_commit) =
         core(next_leader, next_leader_key, store_path, pk_set).await;
 
     // Send all votes to the core.
@@ -186,7 +192,7 @@ async fn commit_block() {
     // Run a core instance.
     let store_path = ".db_test_commit_block";
     let (public_key, secret_key) = keys().pop().unwrap();
-    let (tx_core, _rx_network, mut rx_commit) =
+    let (tx_core, _rx_network, mut _rx_network_smvba, mut rx_commit) =
         core(public_key, secret_key, store_path, pk_set).await;
 
     // Send a the blocks to the core.

@@ -15,15 +15,20 @@ pub struct Filter;
 impl Filter {
     pub fn run(
         mut core: Receiver<FilterInput>,
+        mut core_smvba: Receiver<FilterInput>,
         network: Sender<NetMessage>,
+        net_smvba: Sender<NetMessage>,
         parameters: Parameters,
     ) {
         tokio::spawn(async move {
             let mut pending = FuturesUnordered::new();
+            let mut pending_smvba = FuturesUnordered::new();
             loop {
                 tokio::select! {
                     Some(input) = core.recv() => pending.push(Self::delay(input, parameters.clone())),
+                    Some(input) = core_smvba.recv() => pending_smvba.push(Self::delay(input, parameters.clone())),
                     Some(input) = pending.next() => Self::transmit(input, &network).await,
+                    Some(input) = pending_smvba.next() => Self::transmit(input, &net_smvba).await,
                     else => break
                 }
             }

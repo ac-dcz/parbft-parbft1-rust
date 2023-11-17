@@ -1,0 +1,60 @@
+{
+    "consensus": {
+        "authorities": {
+            "djrZE5Ugb4A8lzf4WVucB7J2iTalrTCAjDEx5Lh0GNI=": {
+                "address": "127.0.0.1:6000",
+                "id": 0,
+                "name": "djrZE5Ugb4A8lzf4WVucB7J2iTalrTCAjDEx5Lh0GNI=",
+                "smvba_address": "127.0.0.1:6004",
+                "stake": 1
+            },
+            "hpzwteeruR94ZVWtdjZVrVzOXgAnbECsFZnWcCeKEdQ=": {
+                "address": "127.0.0.1:6002",
+                "id": 2,
+                "name": "hpzwteeruR94ZVWtdjZVrVzOXgAnbECsFZnWcCeKEdQ=",
+                "smvba_address": "127.0.0.1:6006",
+                "stake": 1
+            },
+            "shHSamTdUYdHcO2BPH6jiEr8BwyDGqyv+YShrS5w8dg=": {
+                "address": "127.0.0.1:6001",
+                "id": 1,
+                "name": "shHSamTdUYdHcO2BPH6jiEr8BwyDGqyv+YShrS5w8dg=",
+                "smvba_address": "127.0.0.1:6005",
+                "stake": 1
+            },
+            "u/LBC5qvEfCG4QSX3L54YPNXY6z6ZhJVvDPu2lPVYeY=": {
+                "address": "127.0.0.1:6003",
+                "id": 3,
+                "name": "u/LBC5qvEfCG4QSX3L54YPNXY6z6ZhJVvDPu2lPVYeY=",
+                "smvba_address": "127.0.0.1:6007",
+                "stake": 1
+            }
+        },
+        "epoch": 1
+    },
+    "mempool": {
+        "authorities": {
+            "djrZE5Ugb4A8lzf4WVucB7J2iTalrTCAjDEx5Lh0GNI=": {
+                "front_address": "127.0.0.1:6008",
+                "mempool_address": "127.0.0.1:6012",
+                "name": "djrZE5Ugb4A8lzf4WVucB7J2iTalrTCAjDEx5Lh0GNI="
+            },
+            "hpzwteeruR94ZVWtdjZVrVzOXgAnbECsFZnWcCeKEdQ=": {
+                "front_address": "127.0.0.1:6010",
+                "mempool_address": "127.0.0.1:6014",
+                "name": "hpzwteeruR94ZVWtdjZVrVzOXgAnbECsFZnWcCeKEdQ="
+            },
+            "shHSamTdUYdHcO2BPH6jiEr8BwyDGqyv+YShrS5w8dg=": {
+                "front_address": "127.0.0.1:6009",
+                "mempool_address": "127.0.0.1:6013",
+                "name": "shHSamTdUYdHcO2BPH6jiEr8BwyDGqyv+YShrS5w8dg="
+            },
+            "u/LBC5qvEfCG4QSX3L54YPNXY6z6ZhJVvDPu2lPVYeY=": {
+                "front_address": "127.0.0.1:6011",
+                "mempool_address": "127.0.0.1:6015",
+                "name": "u/LBC5qvEfCG4QSX3L54YPNXY6z6ZhJVvDPu2lPVYeY="
+            }
+        },
+        "epoch": 1
+    }
+}

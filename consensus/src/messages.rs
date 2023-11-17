@@ -267,7 +267,7 @@ impl SPBVote {
             committee.stake(&self.author) > 0,
             ConsensusError::UnknownAuthority(self.author)
         );
-        self.signature.verify(&self.digest(), &self.author)?;
+        // self.signature.verify(&self.digest(), &self.author)?;
         // let tss_pk = pk_set.public_key_share(committee.id(self.author));
         // // Check the signature.
         // ensure!(
@@ -381,7 +381,7 @@ impl MDone {
     }
 
     pub fn verify(&self) -> ConsensusResult<()> {
-        self.signature.verify(&self.digest(), &self.author)?;
+        // self.signature.verify(&self.digest(), &self.author)?;
         Ok(())
     }
 }

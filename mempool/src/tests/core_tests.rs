@@ -18,6 +18,7 @@ async fn core(
 ) {
     let (tx_network, rx_network) = channel(1);
     let (tx_consensus, _rx_consensus) = channel(1);
+    let (tx_consensus_smvba, _rx_consensus) = channel(1);
     let (tx_core, rx_core) = channel(1);
     let (tx_consensus_mempool, rx_consensus_mempool) = channel(1);
     let (tx_client, rx_client) = channel(1);
@@ -34,6 +35,7 @@ async fn core(
     let store = Store::new_default().unwrap();
     let synchronizer = Synchronizer::new(
         tx_consensus,
+        tx_consensus_smvba,
         store.clone(),
         name,
         committee(),
