@@ -199,6 +199,7 @@ impl Core {
     //initlization epoch
     fn epoch_init(&mut self, epoch: u64) {
         //清除之前的消息
+        self.leader_elector = LeaderElector::new(self.committee.clone());
         self.aggregator = Aggregator::new(self.committee.clone());
         self.height = 1;
         self.epoch = epoch;
@@ -675,7 +676,10 @@ impl Core {
             self.signature_service.clone(),
         )
         .await;
-        let message = ConsensusMessage::ParPrePare(prepare.clone());
+
+        self.handle_par_prepare(prepare.clone()).await?;
+
+        let message = ConsensusMessage::ParPrePare(prepare);
         Synchronizer::transmit(
             message,
             &self.name,
@@ -685,7 +689,6 @@ impl Core {
             PES,
         )
         .await?;
-        self.handle_par_prepare(prepare).await?;
         Ok(())
     }
 
@@ -748,6 +751,7 @@ impl Core {
         proof: SPBProof,
     ) -> ConsensusResult<()> {
         //check message is timeout?
+
         ensure!(
             self.smvba_msg_filter(value.block.epoch, proof.height, proof.round, proof.phase),
             ConsensusError::TimeOutMessage(proof.height, proof.round)
@@ -790,21 +794,21 @@ impl Core {
             ConsensusError::TimeOutMessage(spb_vote.height, spb_vote.round)
         );
 
-        if *self
-            .spb_abandon_flag
-            .entry((spb_vote.height, spb_vote.round))
-            .or_insert(false)
-        {
-            return Ok(());
-        }
+        // if *self
+        //     .spb_abandon_flag
+        //     .entry((spb_vote.height, spb_vote.round))
+        //     .or_insert(false)
+        // {
+        //     return Ok(());
+        // }
 
         spb_vote.verify(&self.committee, &self.pk_set)?;
 
         if let Some(proof) = self.aggregator.add_spb_vote(spb_vote.clone())? {
-            // debug!("Create spb proof {:?}!", proof);
-            println!("Create spb proof {:?}!", proof);
-            self.spb_current_phase
-                .insert((spb_vote.height, spb_vote.round), proof.phase); //phase + 1
+            debug!("Create spb proof {:?}!", proof);
+            // println!("Create spb proof {:?}!", proof);
+            // self.spb_current_phase
+            //     .insert((spb_vote.height, spb_vote.round), proof.phase); //phase + 1
 
             let value = self.spb_proposes.get(&(proof.height, proof.round)).unwrap();
             //进行下一阶段的发送
@@ -812,7 +816,12 @@ impl Core {
                 self.broadcast_pes_propose(value.block.clone(), proof)
                     .await?;
             } else if proof.phase == FIN_PHASE {
-                let message = ConsensusMessage::SPBFinsh(value.clone(), proof.clone());
+                let mut temp = value.clone();
+                temp.phase = FIN_PHASE;
+
+                self.handle_spb_finish(temp.clone(), proof.clone()).await?;
+
+                let message = ConsensusMessage::SPBFinsh(temp, proof);
                 Synchronizer::transmit(
                     message,
                     &self.name,
@@ -822,7 +831,6 @@ impl Core {
                     PES,
                 )
                 .await?;
-                self.handle_spb_finish(value.clone(), proof).await?;
             }
         }
         Ok(())
@@ -839,6 +847,11 @@ impl Core {
 
         value.verify(&self.committee, &proof, &self.pk_set)?;
 
+        self.spb_finishs
+            .entry((proof.height, proof.round))
+            .or_insert(HashMap::new())
+            .insert(value.block.author, (value.clone(), proof.clone()));
+
         let d_flag = self
             .smvba_d_flag
             .entry((proof.height, proof.round))
@@ -847,11 +860,6 @@ impl Core {
         if *d_flag {
             return Ok(());
         }
-
-        self.spb_finishs
-            .entry((proof.height, proof.round))
-            .or_insert(HashMap::new())
-            .insert(value.block.author, (value.clone(), proof.clone()));
 
         let weight = self
             .spb_finishs
@@ -1057,12 +1065,10 @@ impl Core {
             .smvba_votes
             .entry((mvote.height, mvote.round))
             .or_insert(HashSet::new());
-        let mut weight = set.len() as Stake;
-        if weight >= self.committee.quorum_threshold() {
-            return Ok(());
-        }
+
         set.insert(mvote.author);
-        weight += 1;
+
+        let weight = set.len() as Stake;
 
         match mvote.tag {
             MVoteTag::Yes(value, _, vote) => {
@@ -1075,6 +1081,7 @@ impl Core {
                         self.signature_service.clone(),
                     )
                     .await;
+                    self.handle_smvba_halt(mhalt.clone()).await?;
                     let message = ConsensusMessage::SMVBAHalt(mhalt);
                     Synchronizer::transmit(
                         message,
@@ -1085,6 +1092,7 @@ impl Core {
                         PES,
                     )
                     .await?;
+
                     return Ok(());
                 }
             }
@@ -1118,6 +1126,7 @@ impl Core {
         }
         let height = share.height;
         let round = share.round;
+
         if let Some(coin) = self.aggregator.add_smvba_random(share, &self.pk_set)? {
             self.leader_elector.add_random_coin(coin.clone());
 
@@ -1155,9 +1164,6 @@ impl Core {
                     PES,
                 )
                 .await?;
-
-                //halt flag
-                self.smvba_halt_falg.insert((height, round), true);
             } else {
                 let mut pre_vote = MPreVote::new(
                     self.name,
@@ -1212,7 +1218,7 @@ impl Core {
     }
 
     async fn handle_smvba_halt(&mut self, halt: MHalt) -> ConsensusResult<()> {
-        debug!("Processing {:?}", halt);
+        info!("Processing {:?}", halt);
 
         ensure!(
             self.smvba_msg_filter(halt.epoch, halt.height, halt.round, FIN_PHASE),
@@ -1223,6 +1229,10 @@ impl Core {
         // leader 是否与 finish value的proposer 相符
         {
             return Ok(());
+        }
+
+        if halt.author == self.name {
+            self.smvba_halt_falg.insert((halt.height, halt.round), true);
         }
 
         halt.verify(&self.committee, &self.pk_set)?;
@@ -1264,8 +1274,9 @@ impl Core {
         if prepare.epoch != self.epoch || prepare.height + 2 <= self.height {
             return Ok(());
         }
-
-        prepare.verify(&self.committee, &self.pk_set)?;
+        if self.parameters.ddos {
+            prepare.verify(&self.committee, &self.pk_set)?;
+        }
 
         let opt_set = self
             .par_prepare_opts

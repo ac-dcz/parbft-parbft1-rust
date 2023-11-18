@@ -223,7 +223,7 @@ impl SMVBARandomCoinMaker {
         self.shares.push(share.clone());
         self.weight += committee.stake(&author);
         if self.weight == committee.random_coin_threshold() {
-            self.weight = 0; // Ensures QC is only made once.
+            // self.weight = 0; // Ensures QC is only made once.
             let mut sigs = BTreeMap::new();
             // Check the random shares.
             for share in self.shares.clone() {
