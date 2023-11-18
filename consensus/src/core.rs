@@ -772,9 +772,10 @@ impl Core {
         {
             return Ok(());
         }
-
-        //验证Proof是否正确
-        value.verify(&self.committee, &proof, &self.pk_set)?;
+        if self.parameters.exp == 1 {
+            //验证Proof是否正确
+            value.verify(&self.committee, &proof, &self.pk_set)?;
+        }
 
         self.process_spb_propose(&value, &proof).await?;
         Ok(())
@@ -801,9 +802,9 @@ impl Core {
         // {
         //     return Ok(());
         // }
-
-        spb_vote.verify(&self.committee, &self.pk_set)?;
-
+        if self.parameters.exp == 1 {
+            spb_vote.verify(&self.committee, &self.pk_set)?;
+        }
         if let Some(proof) = self.aggregator.add_spb_vote(spb_vote.clone())? {
             debug!("Create spb proof {:?}!", proof);
             // println!("Create spb proof {:?}!", proof);
@@ -845,7 +846,9 @@ impl Core {
             ConsensusError::TimeOutMessage(proof.height, proof.round)
         );
 
-        value.verify(&self.committee, &proof, &self.pk_set)?;
+        if self.parameters.exp == 1 {
+            value.verify(&self.committee, &proof, &self.pk_set)?;
+        }
 
         self.spb_finishs
             .entry((proof.height, proof.round))
@@ -884,7 +887,9 @@ impl Core {
             ConsensusError::TimeOutMessage(mdone.height, mdone.round)
         );
 
-        mdone.verify()?;
+        if self.parameters.exp == 1 {
+            mdone.verify()?;
+        }
 
         let d_flag = self
             .smvba_d_flag
@@ -976,7 +981,9 @@ impl Core {
             ConsensusError::TimeOutMessage(prevote.height, prevote.round)
         );
 
-        prevote.verify(&self.committee, &self.pk_set)?;
+        if self.parameters.exp == 1 {
+            prevote.verify(&self.committee, &self.pk_set)?;
+        }
 
         let y_flag = self
             .smvba_y_flag
@@ -1059,7 +1066,9 @@ impl Core {
             ConsensusError::TimeOutMessage(mvote.height, mvote.round)
         );
 
-        mvote.verify(&self.committee, &self.pk_set)?;
+        if self.parameters.exp == 1 {
+            mvote.verify(&self.committee, &self.pk_set)?;
+        }
 
         let set = self
             .smvba_votes
@@ -1115,7 +1124,9 @@ impl Core {
             ConsensusError::TimeOutMessage(share.height, share.round)
         );
 
-        share.verify(&self.committee, &self.pk_set)?;
+        if self.parameters.exp == 1 {
+            share.verify(&self.committee, &self.pk_set)?;
+        }
 
         if self
             .leader_elector
@@ -1218,7 +1229,7 @@ impl Core {
     }
 
     async fn handle_smvba_halt(&mut self, halt: MHalt) -> ConsensusResult<()> {
-        info!("Processing {:?}", halt);
+        debug!("Processing {:?}", halt);
 
         ensure!(
             self.smvba_msg_filter(halt.epoch, halt.height, halt.round, FIN_PHASE),
@@ -1235,8 +1246,9 @@ impl Core {
             self.smvba_halt_falg.insert((halt.height, halt.round), true);
         }
 
-        halt.verify(&self.committee, &self.pk_set)?;
-
+        if self.parameters.exp == 1 {
+            halt.verify(&self.committee, &self.pk_set)?;
+        }
         //smvba end -> send pes-prepare
         self.active_prepare_pahse(
             halt.height,
@@ -1274,7 +1286,8 @@ impl Core {
         if prepare.epoch != self.epoch || prepare.height + 2 <= self.height {
             return Ok(());
         }
-        if self.parameters.ddos {
+
+        if self.parameters.exp == 1 {
             prepare.verify(&self.committee, &self.pk_set)?;
         }
 
@@ -1396,7 +1409,10 @@ impl Core {
     async fn handle_aba_val(&mut self, aba_val: ABAVal) -> ConsensusResult<()> {
         debug!("Processing {:?}", aba_val);
 
-        aba_val.verify()?;
+        if self.parameters.exp == 1 {
+            aba_val.verify()?;
+        }
+
         if !self.aba_message_filter(aba_val.epoch, aba_val.height, aba_val.round, aba_val.phase) {
             return Ok(());
         }
@@ -1542,7 +1558,9 @@ impl Core {
     async fn handle_aba_rs(&mut self, share: RandomnessShare) -> ConsensusResult<()> {
         debug!("Processing aba coin share {:?}", share);
 
-        share.verify(&self.committee, &self.pk_set)?;
+        if self.parameters.exp == 1 {
+            share.verify(&self.committee, &self.pk_set)?;
+        }
 
         if !self.aba_message_filter(share.epoch, share.height, share.round, MUX_PHASE) {
             return Ok(());
@@ -1618,7 +1636,9 @@ impl Core {
     async fn handle_aba_output(&mut self, aba_out: ABAOutput) -> ConsensusResult<()> {
         debug!("Processing {:?}", aba_out);
 
-        aba_out.verify()?;
+        if self.parameters.exp == 1 {
+            aba_out.verify()?;
+        }
 
         if !self.aba_message_filter(aba_out.epoch, aba_out.height, aba_out.round, MUX_PHASE) {
             return Ok(());
