@@ -359,7 +359,7 @@ impl Core {
     #[async_recursion]
     async fn handle_opt_vote(&mut self, vote: &HVote) -> ConsensusResult<()> {
         debug!("Processing OPT Vote {:?}", vote);
-        // println!("Processing OPT Vote {:?}", vote);
+
         if vote.height < self.height || self.epoch != vote.epoch {
             return Ok(());
         }
@@ -404,12 +404,12 @@ impl Core {
             return;
         }
 
+        // Cleanup the vote aggregator.
         self.aggregator.cleanup_hs_vote(&self.height);
         // Reset the timer and advance round.
         self.height = height + 1;
         debug!("Moved to round {}", self.height);
         self.update_hs_state(self.height);
-        // Cleanup the vote aggregator.
     }
     // -- End Pacemaker --
 
@@ -498,8 +498,8 @@ impl Core {
 
     #[async_recursion]
     async fn process_opt_block(&mut self, block: &Block) -> ConsensusResult<()> {
-        // debug!("Processing OPT Block {:?}", block);
-        println!("Processing OPT Block {:?}", block);
+        debug!("Processing OPT Block {:?}", block);
+
         // Let's see if we have the last three ancestors of the block, that is:
         //      b0 <- |qc0; b1| <- |qc1; block|
         // If we don't, the synchronizer asks for them to other nodes. It will
@@ -588,7 +588,7 @@ impl Core {
         proof: &SPBProof,
     ) -> ConsensusResult<()> {
         debug!("Processing PES Block {:?}", value.block);
-        println!("Processing PES Block {:?}", value.block);
+
         //如果是lock 阶段 保存
         if value.phase == LOCK_PHASE {
             self.spb_locks
@@ -737,13 +737,7 @@ impl Core {
         if *self.smvba_halt_falg.entry((height, round)).or_insert(false) {
             return false;
         }
-        // let cur_phase = self
-        //     .spb_current_phase
-        //     .entry((height, round))
-        //     .or_insert(INIT_PHASE);
-        // if *cur_phase > phase {
-        //     return false;
-        // }
+
         true
     }
 
@@ -836,7 +830,7 @@ impl Core {
 
     async fn handle_spb_finish(&mut self, value: SPBValue, proof: SPBProof) -> ConsensusResult<()> {
         debug!("Processing finish {:?}", proof);
-        // println!("Processing finish {:?}", proof);
+
         // check message is timeout?
         ensure!(
             self.smvba_msg_filter(value.block.epoch, proof.height, proof.round, proof.phase),
@@ -876,7 +870,7 @@ impl Core {
 
     async fn handle_smvba_done(&mut self, mdone: MDone) -> ConsensusResult<()> {
         debug!("Processing  {:?}", mdone);
-        // println!("Processing  {:?}", mdone);
+
         ensure!(
             self.smvba_msg_filter(mdone.epoch, mdone.height, mdone.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(mdone.height, mdone.round)
@@ -1107,7 +1101,7 @@ impl Core {
 
     async fn handle_smvba_rs(&mut self, share: RandomnessShare) -> ConsensusResult<()> {
         debug!("Processing  {:?}", share);
-        // println!("Processing self {}, {:?}", self.name, share);
+
         ensure!(
             self.smvba_msg_filter(share.epoch, share.height, share.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(share.height, share.round)
@@ -1219,7 +1213,7 @@ impl Core {
 
     async fn handle_smvba_halt(&mut self, halt: MHalt) -> ConsensusResult<()> {
         debug!("Processing {:?}", halt);
-        // println!("Processing {:?}", halt);
+
         ensure!(
             self.smvba_msg_filter(halt.epoch, halt.height, halt.round, FIN_PHASE),
             ConsensusError::TimeOutMessage(halt.height, halt.round)
@@ -1266,13 +1260,12 @@ impl Core {
 
     async fn handle_par_prepare(&mut self, prepare: PrePare) -> ConsensusResult<()> {
         debug!("Processing {:?}", prepare);
-        // println!("Processing {:?}", prepare);
-        //不是一个epoch 或者 已经对aba 投过票
+
         if prepare.epoch != self.epoch || prepare.height + 2 <= self.height {
             return Ok(());
         }
 
-        // prepare.verify(&self.committee, &self.pk_set)?;
+        prepare.verify(&self.committee, &self.pk_set)?;
 
         let opt_set = self
             .par_prepare_opts
@@ -1387,6 +1380,7 @@ impl Core {
         true
     }
 
+    // val phase and aux phase
     #[async_recursion]
     async fn handle_aba_val(&mut self, aba_val: ABAVal) -> ConsensusResult<()> {
         debug!("Processing {:?}", aba_val);
@@ -1492,6 +1486,7 @@ impl Core {
 
             if !(mux_vals[0] | mux_vals[1]) {
                 let weight = self.committee.quorum_threshold();
+
                 if temp_vals[0] >= weight && bin_vals[0] {
                     mux_vals[0] = true;
                     flag = true;
@@ -1721,7 +1716,7 @@ impl Core {
             if tag == PES {
                 //如果是悲观路径输出
                 info!("ABA output 1,epoch {} end", self.epoch);
-                // print!("ABA output 1,epoch {} end", self.epoch);
+
                 return Err(ConsensusError::EpochEnd(self.epoch));
             }
         }
@@ -1733,7 +1728,7 @@ impl Core {
     pub async fn run_epoch(&mut self) {
         let mut epoch = 0u64;
         loop {
-            info!("-----Invoke epoch Run {}------", self.epoch);
+            info!("---------------Epoch Run {}------------------", self.epoch);
             self.run().await; //运行当前epoch
             epoch += 1;
             self.epoch_init(epoch);
@@ -1824,9 +1819,8 @@ impl Core {
                 Ok(()) => (),
                 Err(ConsensusError::SerializationError(e)) => error!("Store corrupted. {}", e),
                 Err(ConsensusError::EpochEnd(e)) => {
-                    info!("-------epoch {e} end--------");
-                    print!("-------epoch {e} end--------");
-                    return; //ABA输出1 直接退出当前epoch
+                    info!("---------------Epoch End {e}------------------");
+                    return;
                 }
                 Err(ConsensusError::TimeOutMessage(..)) => {}
                 Err(e) => {
