@@ -324,11 +324,16 @@ impl Core {
         let mut current_block = block.clone();
         while current_block.height > self.last_committed_height {
             if !current_block.payload.is_empty() {
-                info!("Committed {}", current_block);
+                info!("Committed {} epoch {}", current_block, current_block.epoch);
 
                 #[cfg(feature = "benchmark")]
                 for x in &current_block.payload {
-                    info!("Committed B{}({})", current_block.height, base64::encode(x));
+                    info!(
+                        "Committed B{}({}) epoch {}",
+                        current_block.height,
+                        base64::encode(x),
+                        current_block.epoch
+                    );
                 }
                 // Cleanup the mempool.
                 self.mempool_driver.cleanup_par(&current_block).await;
@@ -431,12 +436,17 @@ impl Core {
         )
         .await;
         if !block.payload.is_empty() {
-            info!("Created {}", block);
+            info!("Created {} epoch {}", block, block.epoch);
 
             #[cfg(feature = "benchmark")]
             for x in &block.payload {
                 // NOTE: This log entry is used to compute performance.
-                info!("Created B{}({})", block.height, base64::encode(x));
+                info!(
+                    "Created B{}({}) epoch {}",
+                    block.height,
+                    base64::encode(x),
+                    block.epoch
+                );
             }
         }
         debug!("Created {:?}", block);
