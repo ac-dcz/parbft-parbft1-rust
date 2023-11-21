@@ -148,9 +148,10 @@ class InstanceManager:
         response = client.describe_images(
             Filters=[{
                 'Name': 'description',
-                'Values': ['Canonical, Ubuntu, 20.04 LTS, amd64 focal image build on 2020-10-26']
+                'Values': ['Canonical, Ubuntu, 20.04 LTS, amd64 focal image *']
             }]
         )
+        # print(response)
         return response['Images'][0]['ImageId']
 
     def create_instances(self, instances):
