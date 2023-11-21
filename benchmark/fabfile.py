@@ -20,12 +20,12 @@ def local(ctx):
     }
     node_params = {
         'consensus': {
-            'timeout_delay': 2000,
+            'timeout_delay': 1000,
             'sync_retry_delay': 10_000,
             'max_payload_size': 500,
             'min_block_delay': 0,
             'network_delay': 1000, # message delay on the leaders' proposals during DDoS
-            'ddos': True, # True for DDoS attack on the leader, False otherwise
+            'ddos': False, # True for DDoS attack on the leader, False otherwise
             'exp': 0 # multiplicative factor for exponential fallback
         },
         'mempool': {
@@ -44,7 +44,7 @@ def local(ctx):
 
 
 @task
-def create(ctx, nodes=2):
+def create(ctx, nodes=1): # 创建机器实例  nodes表示在一台机器上跑多少个节点
     ''' Create a testbed'''
     try:
         InstanceManager.make().create_instances(nodes)
@@ -90,7 +90,7 @@ def info(ctx):
 
 @task
 def install(ctx):
-    ''' Install HotStuff on all machines '''
+    ''' Install ParBFT1 on all machines '''
     try:
         Bench(ctx).install()
     except BenchError as e:
@@ -101,9 +101,9 @@ def install(ctx):
 def remote(ctx):
     ''' Run benchmarks on AWS '''
     bench_params = {
-        'nodes': [50],
+        'nodes': [4],
         'rate': [35_000, 40_000],
-        'tx_size': 512,
+        'tx_size': 16,
         'faults': 0, 
         'duration': 300,
         'runs': 2,
@@ -115,13 +115,13 @@ def remote(ctx):
             'max_payload_size': 1_000,
             'min_block_delay': 100,
             'network_delay': 20_000, # message delay on the leaders' proposals during DDoS
-            'ddos': True, # True for DDoS attack on the leader, False otherwise
+            'ddos': False, # True for DDoS attack on the leader, False otherwise
             'exp': 5 # multiplicative factor for exponential fallback
         },
         'mempool': {
             'queue_capacity': 100_000,
             'sync_retry_delay': 100_000,
-            'max_payload_size': 500_000,
+            'max_payload_size': 15_625,
             'min_block_delay': 100
         },
         'protocol': 1, # 0 for 2-chain HotStuff, 1 for Ditto, 2 for 2-chain VABA
@@ -149,7 +149,7 @@ def plot(ctx):
 
 @task
 def kill(ctx):
-    ''' Stop any HotStuff execution on all machines '''
+    ''' Stop any ParBFT execution on all machines '''
     try:
         Bench(ctx).kill()
     except BenchError as e:

@@ -6,7 +6,7 @@ class SettingsError(Exception):
 
 
 class Settings:
-    def __init__(self, key_name, key_path, consensus_port, mempool_port, front_port, repo_name,
+    def __init__(self, key_name, key_path, consensus_port, smvba_port, mempool_port, front_port, repo_name,
                  repo_url, branch, instance_type, aws_regions):
         regions = aws_regions if isinstance(
             aws_regions, list) else [aws_regions]
@@ -14,7 +14,7 @@ class Settings:
             key_name, key_path, repo_name, repo_url, branch, instance_type
         ]
         inputs_str += regions
-        inputs_int = [consensus_port, mempool_port, front_port]
+        inputs_int = [consensus_port, smvba_port, mempool_port, front_port]
         ok = all(isinstance(x, str) for x in inputs_str)
         ok &= all(isinstance(x, int) for x in inputs_int)
         ok &= len(regions) > 0
@@ -24,6 +24,7 @@ class Settings:
         self.key_name = key_name
         self.key_path = key_path
 
+        self.smvba_port = smvba_port
         self.consensus_port = consensus_port
         self.mempool_port = mempool_port
         self.front_port = front_port
@@ -44,6 +45,7 @@ class Settings:
             return cls(
                 data['key']['name'],
                 data['key']['path'],
+                data['ports']['consensus'],
                 data['ports']['consensus'],
                 data['ports']['mempool'],
                 data['ports']['front'],

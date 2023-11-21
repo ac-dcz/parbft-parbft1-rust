@@ -162,6 +162,7 @@ class Bench:
         subprocess.run(cmd, capture_output=True, check=True)
 
         names = [x.name for x in keys]
+        smvba_addr = [f'{x}:{self.settings.smvba_port}' for x in hosts]
         consensus_addr = [f'{x}:{self.settings.consensus_port}' for x in hosts]
         front_addr = [f'{x}:{self.settings.front_port}' for x in hosts]
         tss_keys = []
@@ -169,7 +170,7 @@ class Bench:
             tss_keys += [TSSKey.from_file(PathMaker.threshold_key_file(i))]
         ids = [x.id for x in tss_keys]
         mempool_addr = [f'{x}:{self.settings.mempool_port}' for x in hosts]
-        committee = Committee(names, ids, consensus_addr, front_addr, mempool_addr)
+        committee = Committee(names, ids, consensus_addr,smvba_addr, front_addr, mempool_addr)
         committee.print(PathMaker.committee_file())
 
         node_parameters.print(PathMaker.parameters_file())
@@ -289,9 +290,9 @@ class Bench:
         if node_parameters.protocol == 0:
             Print.info('Running HotStuff')
         elif node_parameters.protocol == 1:
-            Print.info('Running AsyncHotStuff')
+            Print.info('Running ParBFT1')
         elif node_parameters.protocol == 2:
-            Print.info('Running TwoChainVABA')
+            Print.info('Running SMVBA')
         else:
             Print.info('Wrong protocol type!')
             return

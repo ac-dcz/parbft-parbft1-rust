@@ -1756,9 +1756,17 @@ impl Core {
             }
             if tag == PES {
                 //如果是悲观路径输出
-                info!("ABA output 1,epoch {} end", self.epoch);
+                info!(
+                    "------------ABA output 1,epoch {} end--------------",
+                    self.epoch
+                );
 
                 return Err(ConsensusError::EpochEnd(self.epoch));
+            } else {
+                info!(
+                    "------------ABA output 0,epoch {}--------------",
+                    self.epoch
+                );
             }
         }
 
