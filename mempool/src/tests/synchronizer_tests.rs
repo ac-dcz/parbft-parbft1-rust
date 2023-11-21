@@ -12,7 +12,7 @@ async fn verify_empty() {
     let (tx_network, _rx_network) = channel(1);
     let store_path = ".db_test_verify_empty";
     let _ = fs::remove_dir_all(store_path);
-    let store = Store::new_default().unwrap();
+    let store = Store::new(store_path)?;
     let (name, _) = keys().pop().unwrap();
     let mut synchronizer = Synchronizer::new(
         tx_consensus,
@@ -35,7 +35,7 @@ async fn verify_wait() {
     let (tx_network, mut rx_network) = channel(1);
     let store_path = ".db_test_verify_wait";
     let _ = fs::remove_dir_all(store_path);
-    let mut store = Store::new_default().unwrap();
+    let mut store = Store::new(store_path)?;
     let (name, _) = keys().pop().unwrap();
     let mut synchronizer = Synchronizer::new(
         tx_consensus,

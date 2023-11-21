@@ -1,22 +1,17 @@
-use default_db::DefaultDB;
 use std::collections::{HashMap, VecDeque};
-use std::io::Error;
-use tokio::sync::mpsc::{channel, Sender}; //高性能无锁队列 Sender (可以写入信道) Receiver (读取信道)
+use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::oneshot;
 
 #[cfg(test)]
 #[path = "tests/store_tests.rs"]
 pub mod store_tests;
 
-pub mod default_db;
-
-pub type StoreError = Error;
-pub type StoreResult<T> = Result<T, Error>;
+pub type StoreError = rocksdb::Error;
+type StoreResult<T> = Result<T, StoreError>;
 
 type Key = Vec<u8>;
 type Value = Vec<u8>;
 
-//命令类型
 pub enum StoreCommand {
     Write(Key, Value),
     Read(Key, oneshot::Sender<StoreResult<Option<Value>>>),
@@ -28,23 +23,16 @@ pub struct Store {
     channel: Sender<StoreCommand>,
 }
 
-pub trait BaseDB<K, V> {
-    fn put(&mut self, k: &K, v: &V) -> Result<(), Error>;
-    fn get(&self, k: &K) -> Result<Option<V>, Error>;
-}
-
 impl Store {
-    pub fn new_default() -> StoreResult<Self> {
-        let mut db = DefaultDB::<Key, Value>::new();
+    pub fn new(path: &str) -> StoreResult<Self> {
+        let db = rocksdb::DB::open_default(path)?;
         let mut obligations = HashMap::<_, VecDeque<oneshot::Sender<_>>>::new();
         let (tx, mut rx) = channel(100);
         tokio::spawn(async move {
-            //启动一个异步线程
             while let Some(command) = rx.recv().await {
                 match command {
                     StoreCommand::Write(key, value) => {
                         let _ = db.put(&key, &value);
-                        //维护请求读队列
                         if let Some(mut senders) = obligations.remove(&key) {
                             while let Some(s) = senders.pop_front() {
                                 let _ = s.send(Ok(value.clone()));
@@ -62,7 +50,6 @@ impl Store {
                                 .entry(key)
                                 .or_insert_with(VecDeque::new)
                                 .push_back(sender),
-                            //如果没有则放入等待队列中
                             _ => {
                                 let _ = sender.send(response.map(|x| x.unwrap()));
                             }

@@ -32,7 +32,7 @@ async fn core(
     };
     let signature_service = SignatureService::new(secret, None);
     let _ = fs::remove_dir_all(store_path);
-    let store = Store::new_default().unwrap();
+    let store = Store::new(store_path)?;
     let synchronizer = Synchronizer::new(
         tx_consensus,
         tx_consensus_smvba,

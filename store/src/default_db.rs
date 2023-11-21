@@ -3,6 +3,12 @@ use std::collections::HashMap;
 use std::hash::Hash;
 // use std::sync::RwLock;
 // 默认内存DB
+
+pub trait BaseDB<K, V> {
+    fn put(&mut self, k: &K, v: &V) -> Result<(), Error>;
+    fn get(&self, k: &K) -> Result<Option<V>, Error>;
+}
+
 pub struct DefaultDB<K: Clone, V: Clone> {
     pub data: HashMap<K, V>,
 }
