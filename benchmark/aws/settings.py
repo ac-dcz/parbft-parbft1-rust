@@ -46,7 +46,7 @@ class Settings:
                 data['key']['name'],
                 data['key']['path'],
                 data['ports']['consensus'],
-                data['ports']['consensus'],
+                data['ports']['smvba'],
                 data['ports']['mempool'],
                 data['ports']['front'],
                 data['repo']['name'],

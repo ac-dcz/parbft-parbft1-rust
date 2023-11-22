@@ -1,7 +1,7 @@
 {
     "key": {
-        "name": "yucz",
-        "path": "/home/yucz/.ssh/aws"
+        "name": "dcz",
+        "path": "/home/yucz/.ssh/id_rsa"
     },
     "ports": {
         "smvba": 9000,
@@ -15,7 +15,7 @@
         "branch": "master"
     },
     "instances": {
-        "type": "m5d.2xlarge", // 2核
+        "type": "m5d.2xlarge",
         "regions": [
             "us-east-1",
             "eu-north-1",
