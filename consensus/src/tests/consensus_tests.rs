@@ -26,7 +26,7 @@ fn spawn_nodes(
                 SignatureService::new(secret, Some(tss_keys.secret.clone().into_inner()));
             let store_path = format!("{}_{}", store_path, i);
             let _ = fs::remove_dir_all(&store_path);
-            let store = Store::new(&store_path)?;
+            let store = Store::new(&store_path).unwrap();
             // let signature_service = SignatureService::new(secret, None);
             let (tx_consensus, rx_consensus) = channel(10);
             let (tx_smvba, rx_smvba) = channel(10);

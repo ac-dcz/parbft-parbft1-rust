@@ -1,0 +1,60 @@
+{
+    "consensus": {
+        "authorities": {
+            "+FsSCgZB+R382xDg0ZLs+VjObsLLcIjCu1he+E1KB+Y=": {
+                "address": "127.0.0.1:6002",
+                "id": 2,
+                "name": "+FsSCgZB+R382xDg0ZLs+VjObsLLcIjCu1he+E1KB+Y=",
+                "smvba_address": "127.0.0.1:6006",
+                "stake": 1
+            },
+            "K0M6ZWGQWsbxBJcbAPljJnXr25j2trqWFxMMDSeA9VI=": {
+                "address": "127.0.0.1:6000",
+                "id": 0,
+                "name": "K0M6ZWGQWsbxBJcbAPljJnXr25j2trqWFxMMDSeA9VI=",
+                "smvba_address": "127.0.0.1:6004",
+                "stake": 1
+            },
+            "gJSxB3JrP2Z2kt1x39SViMCIvoYeGCsR5hb0uLNUXng=": {
+                "address": "127.0.0.1:6001",
+                "id": 1,
+                "name": "gJSxB3JrP2Z2kt1x39SViMCIvoYeGCsR5hb0uLNUXng=",
+                "smvba_address": "127.0.0.1:6005",
+                "stake": 1
+            },
+            "vipo2qTdV6Uz6lxPk+dUfuPPE2WamiMClMWlfg6ktOQ=": {
+                "address": "127.0.0.1:6003",
+                "id": 3,
+                "name": "vipo2qTdV6Uz6lxPk+dUfuPPE2WamiMClMWlfg6ktOQ=",
+                "smvba_address": "127.0.0.1:6007",
+                "stake": 1
+            }
+        },
+        "epoch": 1
+    },
+    "mempool": {
+        "authorities": {
+            "+FsSCgZB+R382xDg0ZLs+VjObsLLcIjCu1he+E1KB+Y=": {
+                "front_address": "127.0.0.1:6010",
+                "mempool_address": "127.0.0.1:6014",
+                "name": "+FsSCgZB+R382xDg0ZLs+VjObsLLcIjCu1he+E1KB+Y="
+            },
+            "K0M6ZWGQWsbxBJcbAPljJnXr25j2trqWFxMMDSeA9VI=": {
+                "front_address": "127.0.0.1:6008",
+                "mempool_address": "127.0.0.1:6012",
+                "name": "K0M6ZWGQWsbxBJcbAPljJnXr25j2trqWFxMMDSeA9VI="
+            },
+            "gJSxB3JrP2Z2kt1x39SViMCIvoYeGCsR5hb0uLNUXng=": {
+                "front_address": "127.0.0.1:6009",
+                "mempool_address": "127.0.0.1:6013",
+                "name": "gJSxB3JrP2Z2kt1x39SViMCIvoYeGCsR5hb0uLNUXng="
+            },
+            "vipo2qTdV6Uz6lxPk+dUfuPPE2WamiMClMWlfg6ktOQ=": {
+                "front_address": "127.0.0.1:6011",
+                "mempool_address": "127.0.0.1:6015",
+                "name": "vipo2qTdV6Uz6lxPk+dUfuPPE2WamiMClMWlfg6ktOQ="
+            }
+        },
+        "epoch": 1
+    }
+}

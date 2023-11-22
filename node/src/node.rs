@@ -37,7 +37,7 @@ impl Node {
         committee_file: &str,
         key_file: &str,
         tss_file: &str,
-        _store_path: &str,
+        store_path: &str,
         parameters: Option<&str>,
     ) -> Result<Self, NodeError> {
         let (tx_commit, rx_commit) = channel(10000); //commit channel
@@ -60,7 +60,7 @@ impl Node {
         };
 
         // Make the data store.
-        let store = Store::new_default()?;
+        let store = Store::new(store_path)?;
 
         // Run the signature service.
         let signature_service =

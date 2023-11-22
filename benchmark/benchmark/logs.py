@@ -49,7 +49,7 @@ class LogParser:
         sizes = self._merge_results([x.items() for x in sizes])
         
         self.sizes = {
-            k: sizes[k[:44]] for k,_ in self.h_commits.items() if k[:44] in sizes
+            k: sizes[k] for k,_ in self.commits.items() if k in sizes
         }
 
         self.timeouts = max(timeouts)

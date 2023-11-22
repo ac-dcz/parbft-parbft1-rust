@@ -33,7 +33,7 @@ async fn end_to_end() {
             let signature_service = SignatureService::new(secret, None);
             let store_path = format!(".db_test_end_to_end_{}", i);
             let _ = fs::remove_dir_all(&store_path);
-            let store = Store::new(&store_path)?;
+            let store = Store::new(&store_path).unwrap();
             let (tx_consensus, _rx_consensus) = channel(1);
             let (tx_consensus_smvba, _rx_consensus) = channel(1);
             let (tx_consensus_mempool, rx_consensus_mempool) = channel(1);

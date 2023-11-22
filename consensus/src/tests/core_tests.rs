@@ -28,7 +28,7 @@ async fn core(
     };
     let signature_service = SignatureService::new(secret, None);
     let _ = fs::remove_dir_all(store_path);
-    let store = Store::new(store_path)?;
+    let store = Store::new(store_path).unwrap();
     let leader_elector = LeaderElector::new(committee());
     MockMempool::run(rx_consensus_mempool);
     let mempool_driver = MempoolDriver::new(tx_consensus_mempool);
