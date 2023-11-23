@@ -12,6 +12,7 @@ use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
+use futures::sink::Fanout;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
@@ -469,7 +470,9 @@ impl Core {
         .await?;
         self.process_opt_block(&block).await?;
         // Wait for the minimum block delay.
-        sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
+        if !self.parameters.ddos {
+            sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
+        }
         Ok(())
     }
 
@@ -497,7 +500,9 @@ impl Core {
         .await?;
         self.process_spb_propose(&value, &proof).await?;
         // Wait for the minimum block delay.
-        sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
+        if self.parameters.ddos {
+            sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
+        }
         Ok(())
     }
 
