@@ -12,7 +12,6 @@ use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
-use futures::sink::Fanout;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
@@ -381,14 +380,10 @@ impl Core {
             // Process the QC.
             self.process_qc(&qc).await;
 
-            let mut block = None;
-            if self.pes_path || self.name == self.leader_elector.get_leader(self.height) {
-                block = Some(self.generate_proposal().await);
-            }
-
             // Make a new block if we are the next leader.
             if self.name == self.leader_elector.get_leader(self.height) {
-                self.broadcast_opt_propose(block.clone().unwrap()).await?;
+                let block = self.generate_proposal(OPT).await;
+                self.broadcast_opt_propose(block).await?;
             }
 
             if self.pes_path {
@@ -400,7 +395,8 @@ impl Core {
                     round: round.clone(),
                     shares: Vec::new(),
                 };
-                self.broadcast_pes_propose(block.unwrap(), proof).await?;
+                let block = self.generate_proposal(PES).await;
+                self.broadcast_pes_propose(block, proof).await?;
             }
         }
         Ok(())
@@ -422,7 +418,7 @@ impl Core {
     // -- End Pacemaker --
 
     #[async_recursion]
-    async fn generate_proposal(&mut self) -> Block {
+    async fn generate_proposal(&mut self, tag: u8) -> Block {
         // Make a new block.
         let payload = self
             .mempool_driver
@@ -435,6 +431,7 @@ impl Core {
             self.epoch,
             payload,
             self.signature_service.clone(),
+            tag,
         )
         .await;
         if !block.payload.is_empty() {
@@ -736,7 +733,7 @@ impl Core {
         &mut self,
         epoch: SeqNumber,
         height: SeqNumber,
-        round: SeqNumber,
+        _round: SeqNumber,
         _phase: u8,
     ) -> bool {
         if self.epoch > epoch {
@@ -745,15 +742,15 @@ impl Core {
         if self.height >= height + 2 {
             return false;
         }
-        let cur_round = self.smvba_current_round.entry(height).or_insert(1);
-        if *cur_round > round {
-            return false;
-        }
+        // let cur_round = self.smvba_current_round.entry(height).or_insert(1);
+        // if *cur_round > round {
+        //     return false;
+        // }
 
-        // halt?
-        if *self.smvba_halt_falg.entry((height, round)).or_insert(false) {
-            return false;
-        }
+        // // halt?
+        // if *self.smvba_halt_falg.entry((height, round)).or_insert(false) {
+        //     return false;
+        // }
 
         true
     }
@@ -1256,9 +1253,16 @@ impl Core {
             return Ok(());
         }
 
-        if halt.author == self.name {
-            self.smvba_halt_falg.insert((halt.height, halt.round), true);
+        // halt?
+        if *self
+            .smvba_halt_falg
+            .entry((halt.height, halt.round))
+            .or_insert(false)
+        {
+            return Ok(());
         }
+
+        self.smvba_halt_falg.insert((halt.height, halt.round), true);
 
         if self.parameters.exp == 1 {
             halt.verify(&self.committee, &self.pk_set)?;
@@ -1287,7 +1291,7 @@ impl Core {
             round,
             shares: Vec::new(),
         };
-        let block = self.generate_proposal().await;
+        let block = self.generate_proposal(PES).await;
         self.broadcast_pes_propose(block, proof)
             .await
             .expect("Failed to send the PES block");
@@ -1811,11 +1815,11 @@ impl Core {
     pub async fn run(&mut self) {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
-        let block = self.generate_proposal().await;
 
         if self.opt_path && self.name == self.leader_elector.get_leader(self.height) {
             //如果是leader就发送propose
-            self.broadcast_opt_propose(block.clone())
+            let block = self.generate_proposal(OPT).await;
+            self.broadcast_opt_propose(block)
                 .await
                 .expect("Failed to send the OPT block");
         }
@@ -1828,6 +1832,7 @@ impl Core {
                 round: round.clone(),
                 shares: Vec::new(),
             };
+            let block = self.generate_proposal(PES).await;
             self.broadcast_pes_propose(block, proof)
                 .await
                 .expect("Failed to send the PES block");

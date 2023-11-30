@@ -34,6 +34,7 @@ impl Block {
         epoch: SeqNumber,
         payload: Vec<Digest>,
         mut signature_service: SignatureService,
+        tag: u8,
     ) -> Self {
         let block = Self {
             qc,
@@ -42,7 +43,7 @@ impl Block {
             epoch,
             payload,
             signature: Signature::default(),
-            tag: OPT,
+            tag: tag,
         };
 
         let signature = signature_service.request_signature(block.digest()).await;
