@@ -1284,6 +1284,10 @@ impl Core {
         height: SeqNumber,
         round: SeqNumber,
     ) -> ConsensusResult<()> {
+        info!(
+            "-------------smvba round advance height {}, round {}------------",
+            height, round
+        );
         self.update_smvba_state(height, round);
         let proof = SPBProof {
             height: self.height,
