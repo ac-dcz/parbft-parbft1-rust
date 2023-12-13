@@ -199,9 +199,9 @@ impl Core {
         } else {
             let digest_len = Digest::default().size();
             let digests = self.queue.iter().take(max / digest_len).cloned().collect();
-            for x in &digests {
-                self.queue.remove(x); //去重
-            }
+            // for x in &digests {
+            //     self.queue.remove(x); //去重
+            // }
             Ok(digests)
         }
     }
