@@ -114,7 +114,7 @@ impl Consensus {
             parameters.sync_retry_delay,
         )
         .await;
-        sleep(Duration::from_millis(parameters.timeout_delay)).await;
+        sleep(Duration::from_millis(60_000)).await;
         match protocol {
             Protocol::HotStuff => {
                 // Run HotStuff
