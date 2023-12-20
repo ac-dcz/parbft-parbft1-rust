@@ -14,7 +14,7 @@ pub enum PayloadStatus {
 
 #[derive(Debug)]
 pub enum ConsensusMempoolMessage {
-    Get(usize, oneshot::Sender<Vec<Digest>>),
+    Get(usize, oneshot::Sender<Vec<Digest>>, u8),
     Verify(Box<Block>, oneshot::Sender<PayloadStatus>, u8),
     Cleanup(Vec<Digest>, SeqNumber),
 }
@@ -28,9 +28,9 @@ impl MempoolDriver {
         Self { mempool_channel }
     }
 
-    pub async fn get(&mut self, max: usize) -> Vec<Digest> {
+    pub async fn get(&mut self, max: usize, tag: u8) -> Vec<Digest> {
         let (sender, receiver) = oneshot::channel();
-        let message = ConsensusMempoolMessage::Get(max, sender);
+        let message = ConsensusMempoolMessage::Get(max, sender, tag);
         self.mempool_channel
             .send(message)
             .await

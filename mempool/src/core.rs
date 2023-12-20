@@ -3,7 +3,7 @@ use crate::error::{MempoolError, MempoolResult};
 use crate::messages::Payload;
 use crate::payload::PayloadMaker;
 use crate::synchronizer::Synchronizer;
-use consensus::{Block, ConsensusMempoolMessage, PayloadStatus, SeqNumber};
+use consensus::{Block, ConsensusMempoolMessage, PayloadStatus, SeqNumber, OPT, PES};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 #[cfg(feature = "benchmark")]
@@ -38,7 +38,8 @@ pub struct Core {
     core_channel: Receiver<MempoolMessage>,
     consensus_channel: Receiver<ConsensusMempoolMessage>,
     network_channel: Sender<NetMessage>,
-    queue: HashSet<Digest>,
+    opt_queue: HashSet<Digest>,
+    pes_queue: HashSet<Digest>,
 }
 
 impl Core {
@@ -54,7 +55,8 @@ impl Core {
         consensus_channel: Receiver<ConsensusMempoolMessage>,
         network_channel: Sender<NetMessage>,
     ) -> Self {
-        let queue = HashSet::with_capacity(parameters.queue_capacity);
+        let opt_queue = HashSet::with_capacity(parameters.queue_capacity);
+        let pes_queue = HashSet::with_capacity(parameters.queue_capacity * 3 / 2);
         Self {
             name,
             committee,
@@ -64,7 +66,8 @@ impl Core {
             core_channel,
             consensus_channel,
             network_channel,
-            queue,
+            opt_queue,
+            pes_queue,
             payload_maker,
         }
     }
@@ -96,7 +99,8 @@ impl Core {
     ) -> MempoolResult<()> {
         // Drop the transaction if our mempool is full.
         ensure!(
-            self.queue.len() < self.parameters.queue_capacity,
+            self.opt_queue.len() < self.opt_queue.capacity()
+                && self.pes_queue.len() < self.pes_queue.capacity(),
             MempoolError::MempoolFull
         );
 
@@ -132,7 +136,7 @@ impl Core {
     async fn handle_own_payload(&mut self, payload: Payload) -> MempoolResult<()> {
         // Drop the transaction if our mempool is full.
         ensure!(
-            self.queue.len() < self.parameters.queue_capacity,
+            self.opt_queue.len() < self.parameters.queue_capacity,
             MempoolError::MempoolFull
         );
 
@@ -140,7 +144,8 @@ impl Core {
         // we will add to the queue.
         let digest = payload.digest();
         self.process_own_payload(&digest, payload).await?; //payload存入queue中
-        self.queue.insert(digest);
+        self.opt_queue.insert(digest.clone());
+        self.pes_queue.insert(digest);
         Ok(())
     }
 
@@ -168,7 +173,8 @@ impl Core {
         self.store_payload(digest.to_vec(), &payload).await;
 
         // Add the payload to the queue.
-        self.queue.insert(digest);
+        self.opt_queue.insert(digest.clone());
+        self.pes_queue.insert(digest);
         Ok(())
     }
 
@@ -187,8 +193,8 @@ impl Core {
         Ok(())
     }
 
-    async fn get_payload(&mut self, max: usize) -> MempoolResult<Vec<Digest>> {
-        if self.queue.is_empty() {
+    async fn get_payload(&mut self, max: usize, tag: u8) -> MempoolResult<Vec<Digest>> {
+        if (tag == OPT && self.opt_queue.is_empty()) || (tag == PES && self.pes_queue.is_empty()) {
             if let Some(payload) = self.payload_maker.make().await {
                 let digest = payload.digest();
                 self.process_own_payload(&digest, payload).await?;
@@ -196,12 +202,29 @@ impl Core {
             } else {
                 Ok(Vec::new())
             }
+        } else if tag == OPT {
+            let digest_len = Digest::default().size();
+            let digests = self
+                .opt_queue
+                .iter()
+                .take(max / digest_len)
+                .cloned()
+                .collect();
+            for x in &digests {
+                self.opt_queue.remove(x); //去重
+            }
+            Ok(digests)
         } else {
             let digest_len = Digest::default().size();
-            let digests = self.queue.iter().take(max / digest_len).cloned().collect();
-            // for x in &digests {
-            //     self.queue.remove(x); //去重
-            // }
+            let digests = self
+                .pes_queue
+                .iter()
+                .take(max / digest_len)
+                .cloned()
+                .collect();
+            for x in &digests {
+                self.pes_queue.remove(x); //去重
+            }
             Ok(digests)
         }
     }
@@ -213,7 +236,7 @@ impl Core {
     async fn cleanup(&mut self, digests: Vec<Digest>, round: SeqNumber) {
         self.synchronizer.cleanup(round).await;
         for x in &digests {
-            self.queue.remove(x);
+            self.opt_queue.remove(x);
         }
     }
 
@@ -236,8 +259,8 @@ impl Core {
                 },
                 Some(message) = self.consensus_channel.recv() => {//处理共识发送的Payload请求
                     match message {
-                        ConsensusMempoolMessage::Get(max, sender) => {
-                            let result = self.get_payload(max).await;
+                        ConsensusMempoolMessage::Get(max, sender,tag) => {
+                            let result = self.get_payload(max,tag).await;
                             log(result.as_ref().map(|_| &()));
                             let _ = sender.send(result.unwrap_or_default());
                         },

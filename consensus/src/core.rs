@@ -209,7 +209,6 @@ impl Core {
         self.spb_proposes = HashMap::new();
         self.spb_finishs = HashMap::new();
         self.smvba_current_round = HashMap::new();
-        // self.smvba_yes_votes = HashMap::new();
         self.smvba_votes = HashMap::new();
         self.smvba_no_prevotes = HashMap::new();
         self.prepare_tag = HashSet::new();
@@ -422,7 +421,7 @@ impl Core {
         // Make a new block.
         let payload = self
             .mempool_driver
-            .get(self.parameters.max_payload_size)
+            .get(self.parameters.max_payload_size, tag)
             .await;
         let block = Block::new(
             self.high_qc.clone(),
@@ -733,7 +732,7 @@ impl Core {
         &mut self,
         epoch: SeqNumber,
         height: SeqNumber,
-        _round: SeqNumber,
+        round: SeqNumber,
         _phase: u8,
     ) -> bool {
         if self.epoch > epoch {
@@ -747,10 +746,10 @@ impl Core {
         //     return false;
         // }
 
-        // // halt?
-        // if *self.smvba_halt_falg.entry((height, round)).or_insert(false) {
-        //     return false;
-        // }
+        // halt?
+        if *self.smvba_halt_falg.entry((height, round)).or_insert(false) {
+            return false;
+        }
 
         true
     }
@@ -776,13 +775,13 @@ impl Core {
             return Err(ConsensusError::EpochEnd(self.epoch));
         }
 
-        if *self
-            .spb_abandon_flag
-            .entry((proof.height, proof.round))
-            .or_insert(false)
-        {
-            return Ok(());
-        }
+        // if *self
+        //     .spb_abandon_flag
+        //     .entry((proof.height, proof.round))
+        //     .or_insert(false)
+        // {
+        //     return Ok(());
+        // }
         if self.parameters.exp == 1 {
             //验证Proof是否正确
             value.verify(&self.committee, &proof, &self.pk_set)?;
@@ -1262,11 +1261,10 @@ impl Core {
             return Ok(());
         }
 
-        self.smvba_halt_falg.insert((halt.height, halt.round), true);
-
         if self.parameters.exp == 1 {
             halt.verify(&self.committee, &self.pk_set)?;
         }
+        self.smvba_halt_falg.insert((halt.height, halt.round), true);
         //smvba end -> send pes-prepare
         self.active_prepare_pahse(
             halt.height,
@@ -1295,7 +1293,18 @@ impl Core {
             round,
             shares: Vec::new(),
         };
-        let block = self.generate_proposal(PES).await;
+        let block: Block;
+        if self.spb_proposes.contains_key(&(height, round - 1)) {
+            block = self
+                .spb_proposes
+                .get(&(height, round - 1))
+                .unwrap()
+                .block
+                .clone()
+        } else {
+            block = self.generate_proposal(PES).await;
+        }
+
         self.broadcast_pes_propose(block, proof)
             .await
             .expect("Failed to send the PES block");

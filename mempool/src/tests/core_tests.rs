@@ -113,7 +113,7 @@ async fn get_payload() {
 
     // Get the next payload.
     let (sender, receiver) = oneshot::channel();
-    let message = ConsensusMempoolMessage::Get(64, sender);
+    let message = ConsensusMempoolMessage::Get(64, sender, OPT);
     tx_consensus.send(message).await.unwrap();
     let result = receiver.await.unwrap();
     assert_eq!(result, vec![payload().digest()]);
