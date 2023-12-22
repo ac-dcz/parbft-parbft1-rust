@@ -49,7 +49,7 @@ class LogParser:
         sizes = self._merge_results([x.items() for x in sizes])
         
         self.sizes = {
-            k: sizes[k] for k,_ in self.commits.items() if k in sizes
+            k: sizes[k[:44]] for k,_ in self.h_commits.items() if k[:44] in sizes
         }
 
         self.timeouts = max(timeouts)
@@ -242,11 +242,44 @@ class LogParser:
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
             '-----------------------------------------\n'
         )
+    def transactionsWithTime(self):
+        times,t_times = [],[0]
+        time2num = {}
+        for k,t in self.h_commits.items():
+            if k in self.sizes:
+                if t not in time2num:
+                    time2num[t] = 0
+                    times.append(t)
+                time2num[t] += self.sizes[k]/self.size[0]
+        times.sort()
+        start,key,temp = times[0],0.0 ,{}
+        for t in times:
+            d = t-start
+            if d<=0.002:
+                d=0
+            key+=d
+            start+=d
+            if len(t_times)==0 or t_times[-1]!=key:
+                t_times.append(key)    
+            temp[key] = temp.get(key-d,0) + time2num[t]
 
-    def print(self, filename):
-        assert isinstance(filename, str)
-        with open(filename, 'a') as f:
+        content = ""
+        for i,t in enumerate(t_times):
+            line = ""
+            if i!=0:
+                line += f'{t},{temp[t_times[i-1]]}\n'
+            line += f'{t},{temp[t]}\n'
+            content+=line
+
+        return content
+
+    def print(self, r_filename,t_filename):
+        assert isinstance(r_filename, str)
+        assert isinstance(t_filename, str)
+        with open(r_filename, 'a') as f:
             f.write(self.result())
+        with open(t_filename, 'w') as f:
+            f.write(self.transactionsWithTime())
 
     @classmethod
     def process(cls, directory, faults=0, protocol=0, ddos=False):

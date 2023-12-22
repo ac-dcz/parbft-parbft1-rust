@@ -207,6 +207,7 @@ class Bench:
         addresses = [f'{x}:{self.settings.front_port}' for x in hosts]
         rate_share = ceil(rate / committee.size())  # Take faults into account.
         timeout = node_parameters.timeout_delay
+        synctime = node_parameters.node_sync_time
         client_logs = [PathMaker.client_log_file(i) for i in range(len(hosts))]
         for host, addr, log_file in zip(hosts, addresses, client_logs):
             cmd = CommandMaker.run_client(
@@ -214,6 +215,7 @@ class Bench:
                 bench_parameters.tx_size,
                 rate_share,
                 timeout,
+                synctime,
                 nodes=addresses
             )
             self._background_run(host, cmd, log_file)
@@ -239,7 +241,7 @@ class Bench:
 
         # Wait for the nodes to synchronize
         Print.info('Waiting for the nodes to synchronize...')
-        sleep(node_parameters.timeout_delay / 1000)
+        sleep(node_parameters.node_sync_time / 1000)
 
         # Wait for all transactions to be processed.
         duration = bench_parameters.duration
@@ -337,9 +339,10 @@ class Bench:
                         self._run_single(
                             hosts, r, bench_parameters, node_parameters, debug
                         )
-                        self._logs(hosts, faults, protocol, ddos).print(PathMaker.result_file(
-                            n, r, bench_parameters.tx_size, faults
-                        ))
+                        self._logs(hosts, faults, protocol, ddos).print(
+                            PathMaker.result_file(n, r, bench_parameters.tx_size, faults),
+                            PathMaker.txs_file(n, r, bench_parameters.tx_size, faults)
+                        )
                     except (subprocess.SubprocessError, GroupException, ParseError) as e:
                         self.kill(hosts=hosts)
                         if isinstance(e, GroupException):
