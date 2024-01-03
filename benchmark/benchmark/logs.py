@@ -270,7 +270,7 @@ class LogParser:
                 line += f'{t},{temp[t_times[i-1]]}\n'
             line += f'{t},{temp[t]}\n'
             content+=line
-
+        content += "\n"
         return content
 
     def print(self, r_filename,t_filename):
@@ -278,7 +278,7 @@ class LogParser:
         assert isinstance(t_filename, str)
         with open(r_filename, 'a') as f:
             f.write(self.result())
-        with open(t_filename, 'w') as f:
+        with open(t_filename, 'a') as f:
             f.write(self.transactionsWithTime())
 
     @classmethod
