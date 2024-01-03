@@ -284,38 +284,18 @@ impl Core {
         self.par_value_wait.retain(|h, _| h > height);
     }
 
+    fn is_optmistic(&self) -> bool {
+        return !self.parameters.ddos && !self.parameters.random_ddos;
+    }
+
     async fn store_block(&mut self, block: &Block) {
         let key = block.digest().to_vec();
         let value = bincode::serialize(block).expect("Failed to serialize block");
         self.store.write(key, value).await;
     }
 
-    // -- Start Safety Module --
     fn increase_last_voted_round(&mut self, target: SeqNumber) {
         self.last_voted_height = max(self.last_voted_height, target);
-    }
-
-    async fn make_spb_vote(&mut self, value: &SPBValue) -> Option<SPBVote> {
-        //有效性规则由其他过程完成
-        if value.phase > LOCK_PHASE {
-            return None;
-        }
-        Some(SPBVote::new(value.clone(), self.name, self.signature_service.clone()).await)
-    }
-
-    async fn make_opt_vote(&mut self, block: &Block) -> Option<HVote> {
-        // Check if we can vote for this block.
-        let safety_rule_1 = block.height > self.last_voted_height;
-        let safety_rule_2 = block.qc.height + 1 == block.height;
-
-        if !(safety_rule_1 && safety_rule_2) {
-            return None;
-        }
-
-        // Ensure we won't vote for contradicting blocks.
-        self.increase_last_voted_round(block.height);
-        // TODO [issue #15]: Write to storage preferred_round and last_voted_round.
-        Some(HVote::new(&block, self.name, self.signature_service.clone()).await)
     }
 
     #[async_recursion]
@@ -352,79 +332,16 @@ impl Core {
         }
         Ok(())
     }
-    // -- End Safety Module --
-
-    // -- Start Pacemaker --
-    fn update_high_qc(&mut self, qc: &QC) {
-        if qc.height > self.high_qc.height {
-            self.high_qc = qc.clone();
-        }
-    }
 
     #[async_recursion]
-    async fn handle_opt_vote(&mut self, vote: &HVote) -> ConsensusResult<()> {
-        debug!("Processing OPT Vote {:?}", vote);
-
-        if vote.height < self.height || self.epoch != vote.epoch {
-            return Ok(());
-        }
-
-        // Ensure the vote is well formed.
-        vote.verify(&self.committee)?;
-
-        // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(qc) = self.aggregator.add_hs_vote(vote.clone())? {
-            debug!("Assembled {:?}", qc);
-            // println!("Assembled {:?}", qc);
-            // Process the QC.
-            self.process_qc(&qc).await;
-
-            // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.height) {
-                let block = self.generate_proposal(OPT).await;
-                self.broadcast_opt_propose(block).await?;
-            }
-
-            if self.pes_path {
-                self.update_smvba_state(self.height, 1);
-                let round = self.smvba_current_round.get(&self.height).unwrap_or(&1);
-                let proof = SPBProof {
-                    height: self.height,
-                    phase: INIT_PHASE,
-                    round: round.clone(),
-                    shares: Vec::new(),
-                };
-                let block = self.generate_proposal(PES).await;
-                self.broadcast_pes_propose(block, proof).await?;
-            }
-        }
-        Ok(())
-    }
-
-    #[async_recursion]
-    async fn advance_height(&mut self, height: SeqNumber) {
-        if height < self.height {
-            return;
-        }
-
-        // Cleanup the vote aggregator.
-        self.aggregator.cleanup_hs_vote(&self.height);
-        // Reset the timer and advance round.
-        self.height = height + 1;
-        debug!("Moved to round {}", self.height);
-        self.update_hs_state(self.height);
-    }
-    // -- End Pacemaker --
-
-    #[async_recursion]
-    async fn generate_proposal(&mut self, tag: u8) -> Block {
+    async fn generate_proposal(&mut self, qc: Option<QC>, tag: u8) -> Block {
         // Make a new block.
         let payload = self
             .mempool_driver
             .get(self.parameters.max_payload_size, tag)
             .await;
         let block = Block::new(
-            self.high_qc.clone(),
+            qc.unwrap_or(QC::genesis()),
             self.name,
             self.height,
             self.epoch,
@@ -452,6 +369,91 @@ impl Core {
         block
     }
 
+    #[async_recursion]
+    async fn advance_height(&mut self, height: SeqNumber) {
+        if height < self.height {
+            return;
+        }
+
+        // Cleanup the vote aggregator.
+        self.aggregator.cleanup_hs_vote(&self.height);
+        // Reset the timer and advance round.
+        self.height = height + 1;
+        debug!("Moved to round {}", self.height);
+        self.update_hs_state(self.height);
+    }
+
+    fn update_high_qc(&mut self, qc: &QC) {
+        if qc.height > self.high_qc.height {
+            self.high_qc = qc.clone();
+        }
+    }
+
+    async fn process_qc(&mut self, qc: &QC) {
+        self.advance_height(qc.height).await;
+        self.update_high_qc(qc);
+    }
+
+    /**********************two chain HotStuff*********************/
+    async fn make_opt_vote(&mut self, block: &Block) -> Option<HVote> {
+        // Check if we can vote for this block.
+        let safety_rule_1 = block.height > self.last_voted_height;
+        let safety_rule_2 = block.qc.height + 1 == block.height;
+
+        if !(safety_rule_1 && safety_rule_2) {
+            return None;
+        }
+
+        // Ensure we won't vote for contradicting blocks.
+        self.increase_last_voted_round(block.height);
+        // TODO [issue #15]: Write to storage preferred_round and last_voted_round.
+        Some(HVote::new(&block, self.name, self.signature_service.clone()).await)
+    }
+
+    #[async_recursion]
+    async fn handle_opt_vote(&mut self, vote: &HVote) -> ConsensusResult<()> {
+        debug!("Processing OPT Vote {:?}", vote);
+
+        if vote.height < self.height || self.epoch != vote.epoch {
+            return Ok(());
+        }
+
+        // Ensure the vote is well formed.
+        vote.verify(&self.committee)?;
+
+        // Add the new vote to our aggregator and see if we have a quorum.
+        if let Some(qc) = self.aggregator.add_hs_vote(vote.clone())? {
+            debug!("Assembled {:?}", qc);
+            // println!("Assembled {:?}", qc);
+            // Process the QC.
+            self.process_qc(&qc).await;
+
+            // Make a new block if we are the next leader.
+            if self.name == self.leader_elector.get_leader(self.height) {
+                let block = self
+                    .generate_proposal(Some(self.high_qc.clone()), OPT)
+                    .await;
+                self.broadcast_opt_propose(block).await?;
+            }
+
+            if self.pes_path && !self.is_optmistic() {
+                self.update_smvba_state(self.height, 1);
+                let round = self.smvba_current_round.get(&self.height).unwrap_or(&1);
+                let proof = SPBProof {
+                    height: self.height,
+                    phase: INIT_PHASE,
+                    round: round.clone(),
+                    shares: Vec::new(),
+                };
+                let block = self
+                    .generate_proposal(Some(self.high_qc.clone()), PES)
+                    .await;
+                self.broadcast_pes_propose(block, proof).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn broadcast_opt_propose(&mut self, block: Block) -> ConsensusResult<()> {
         // Process our new block and broadcast it.
         let message = ConsensusMessage::HsPropose(block.clone());
@@ -472,41 +474,6 @@ impl Core {
         Ok(())
     }
 
-    async fn broadcast_pes_propose(
-        &mut self,
-        block: Block,
-        proof: SPBProof,
-    ) -> ConsensusResult<()> {
-        let value = SPBValue::new(block, proof.round, proof.phase).await;
-
-        if proof.phase == INIT_PHASE {
-            self.spb_proposes
-                .insert((value.block.height, value.round), value.clone());
-        }
-
-        let message = ConsensusMessage::SPBPropose(value.clone(), proof.clone());
-        Synchronizer::transmit(
-            message,
-            &self.name,
-            None,
-            &self.network_filter_smvba,
-            &self.committee,
-            PES,
-        )
-        .await?;
-        self.process_spb_propose(&value, &proof).await?;
-        // Wait for the minimum block delay.
-        if self.parameters.ddos {
-            sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
-        }
-        Ok(())
-    }
-
-    async fn process_qc(&mut self, qc: &QC) {
-        self.advance_height(qc.height).await;
-        self.update_high_qc(qc);
-    }
-
     #[async_recursion]
     async fn process_opt_block(&mut self, block: &Block) -> ConsensusResult<()> {
         debug!("Processing OPT Block {:?}", block);
@@ -524,9 +491,14 @@ impl Core {
                 return Ok(());
             }
         };
-
         //TODO:
-        // 1. 对 height-1 的 block 发送 prepare-opt
+
+        // 1. 终止 height-2 的 SMVBA
+        if self.pes_path && self.height > 2 {
+            self.terminate_smvba(self.height - 2).await?;
+        }
+
+        // 2. 对 height-1 的 block 发送 prepare-opt
         if self.pes_path && block.height > 1 {
             self.active_prepare_pahse(
                 block.height - 1,
@@ -536,9 +508,18 @@ impl Core {
             )
             .await?;
         }
-        // 2. 终止 height-2 的 SMVBA
-        if self.pes_path && self.height > 2 {
-            self.terminate_smvba(self.height - 2).await?;
+
+        // 在完全乐观情况下启动 SMVBA
+        if self.is_optmistic() && self.pes_path {
+            let round = self.smvba_current_round.entry(self.height).or_insert(1);
+            let proof = SPBProof {
+                height: self.height,
+                phase: INIT_PHASE,
+                round: round.clone(),
+                shares: Vec::new(),
+            };
+            let b = self.generate_proposal(Some(block.qc.clone()), PES).await;
+            self.broadcast_pes_propose(b, proof).await?;
         }
 
         // Store the block only if we have already processed all its ancestors.
@@ -576,18 +557,34 @@ impl Core {
         // See if we can vote for this block.
         if let Some(vote) = self.make_opt_vote(block).await {
             debug!("Created hs {:?}", vote);
-            //3. broadcast vote
             let message = ConsensusMessage::HSVote(vote.clone());
-            Synchronizer::transmit(
-                message,
-                &self.name,
-                None,
-                &self.network_filter,
-                &self.committee,
-                OPT,
-            )
-            .await?;
-            self.handle_opt_vote(&vote).await?;
+            if self.is_optmistic() {
+                let leader = self.leader_elector.get_leader(self.height + 1);
+                if leader != self.name {
+                    Synchronizer::transmit(
+                        message,
+                        &self.name,
+                        Some(&leader),
+                        &self.network_filter,
+                        &self.committee,
+                        OPT,
+                    )
+                    .await?;
+                } else {
+                    self.handle_opt_vote(&vote).await?;
+                }
+            } else {
+                Synchronizer::transmit(
+                    message,
+                    &self.name,
+                    None,
+                    &self.network_filter,
+                    &self.committee,
+                    OPT,
+                )
+                .await?;
+                self.handle_opt_vote(&vote).await?;
+            }
         }
         Ok(())
     }
@@ -666,47 +663,6 @@ impl Core {
         self.process_opt_block(block).await
     }
 
-    async fn active_prepare_pahse(
-        &mut self,
-        height: SeqNumber,
-        block: &Block,
-        proof: PrePareProof,
-        path: u8,
-    ) -> ConsensusResult<()> {
-        if self.prepare_tag.contains(&height) {
-            return Ok(());
-        }
-        self.prepare_tag.insert(height);
-
-        let prepare = PrePare::new(
-            self.name,
-            block.clone(),
-            proof,
-            path,
-            self.signature_service.clone(),
-        )
-        .await;
-
-        self.handle_par_prepare(prepare.clone()).await?;
-
-        let message = ConsensusMessage::ParPrePare(prepare);
-        Synchronizer::transmit(
-            message,
-            &self.name,
-            None,
-            &self.network_filter_smvba,
-            &self.committee,
-            PES,
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn terminate_smvba(&mut self, height: SeqNumber) -> ConsensusResult<()> {
-        self.clean_smvba_state(&height);
-        Ok(())
-    }
-
     async fn handle_sync_request(
         &mut self,
         digest: Digest,
@@ -725,6 +681,15 @@ impl Core {
             )
             .await?;
         }
+        Ok(())
+    }
+
+    /**********************two chain HotStuff*********************/
+
+    /*********************SMVBA*****************************/
+
+    async fn terminate_smvba(&mut self, height: SeqNumber) -> ConsensusResult<()> {
+        self.clean_smvba_state(&height);
         Ok(())
     }
 
@@ -752,6 +717,36 @@ impl Core {
         }
 
         true
+    }
+
+    async fn broadcast_pes_propose(
+        &mut self,
+        block: Block,
+        proof: SPBProof,
+    ) -> ConsensusResult<()> {
+        let value = SPBValue::new(block, proof.round, proof.phase).await;
+
+        if proof.phase == INIT_PHASE {
+            self.spb_proposes
+                .insert((value.block.height, value.round), value.clone());
+        }
+
+        let message = ConsensusMessage::SPBPropose(value.clone(), proof.clone());
+        Synchronizer::transmit(
+            message,
+            &self.name,
+            None,
+            &self.network_filter_smvba,
+            &self.committee,
+            PES,
+        )
+        .await?;
+        self.process_spb_propose(&value, &proof).await?;
+        // Wait for the minimum block delay.
+        if self.parameters.ddos {
+            sleep(Duration::from_millis(self.parameters.min_block_delay)).await;
+        }
+        Ok(())
     }
 
     //SMVBA only deal current round
@@ -789,6 +784,14 @@ impl Core {
 
         self.process_spb_propose(&value, &proof).await?;
         Ok(())
+    }
+
+    async fn make_spb_vote(&mut self, value: &SPBValue) -> Option<SPBVote> {
+        //有效性规则由其他过程完成
+        if value.phase > LOCK_PHASE {
+            return None;
+        }
+        Some(SPBVote::new(value.clone(), self.name, self.signature_service.clone()).await)
     }
 
     #[async_recursion]
@@ -1302,7 +1305,9 @@ impl Core {
                 .block
                 .clone()
         } else {
-            block = self.generate_proposal(PES).await;
+            block = self
+                .generate_proposal(Some(self.high_qc.clone()), PES)
+                .await;
         }
 
         self.broadcast_pes_propose(block, proof)
@@ -1311,6 +1316,9 @@ impl Core {
         Ok(())
     }
 
+    /*********************SMVBA******************************/
+
+    /***********************PrePare***********************************/
     async fn handle_par_prepare(&mut self, prepare: PrePare) -> ConsensusResult<()> {
         debug!("Processing {:?}", prepare);
 
@@ -1412,6 +1420,45 @@ impl Core {
 
         Ok(())
     }
+
+    async fn active_prepare_pahse(
+        &mut self,
+        height: SeqNumber,
+        block: &Block,
+        proof: PrePareProof,
+        path: u8,
+    ) -> ConsensusResult<()> {
+        if self.prepare_tag.contains(&height) {
+            return Ok(());
+        }
+        self.prepare_tag.insert(height);
+
+        let prepare = PrePare::new(
+            self.name,
+            block.clone(),
+            proof,
+            path,
+            self.signature_service.clone(),
+        )
+        .await;
+
+        self.handle_par_prepare(prepare.clone()).await?;
+
+        let message = ConsensusMessage::ParPrePare(prepare);
+        Synchronizer::transmit(
+            message,
+            &self.name,
+            None,
+            &self.network_filter_smvba,
+            &self.committee,
+            PES,
+        )
+        .await?;
+        Ok(())
+    }
+    /***********************PrePare***********************************/
+
+    /**************************ABA************************************/
 
     fn aba_message_filter(
         &mut self,
@@ -1728,6 +1775,8 @@ impl Core {
         Ok(())
     }
 
+    /**************************ABA************************************/
+
     async fn handle_par_out(&mut self, height: SeqNumber, val: usize) -> ConsensusResult<()> {
         //TODO deal
         if height < self.last_committed_height {
@@ -1831,13 +1880,15 @@ impl Core {
 
         if self.opt_path && self.name == self.leader_elector.get_leader(self.height) {
             //如果是leader就发送propose
-            let block = self.generate_proposal(OPT).await;
+            let block = self
+                .generate_proposal(Some(self.high_qc.clone()), OPT)
+                .await;
             self.broadcast_opt_propose(block)
                 .await
                 .expect("Failed to send the OPT block");
         }
         //如果启动了悲观路劲
-        if self.pes_path {
+        if (self.pes_path && !self.is_optmistic()) || !self.opt_path {
             let round = self.smvba_current_round.get(&self.height).unwrap_or(&1);
             let proof = SPBProof {
                 height: self.height,
@@ -1845,7 +1896,9 @@ impl Core {
                 round: round.clone(),
                 shares: Vec::new(),
             };
-            let block = self.generate_proposal(PES).await;
+            let block = self
+                .generate_proposal(Some(self.high_qc.clone()), PES)
+                .await;
             self.broadcast_pes_propose(block, proof)
                 .await
                 .expect("Failed to send the PES block");
