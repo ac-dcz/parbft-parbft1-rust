@@ -49,7 +49,7 @@ class LogParser:
         sizes = self._merge_results([x.items() for x in sizes])
         
         self.sizes = {
-            k: sizes[k[:44]] for k,_ in self.h_commits.items() if k[:44] in sizes
+            k[:44]: sizes[k[:44]] for k,_ in self.h_commits.items() if k[:44] in sizes
         }
 
         self.timeouts = max(timeouts)
@@ -245,7 +245,7 @@ class LogParser:
     def transactionsWithTime(self):
         times,t_times = [],[0]
         time2num = {}
-        for k,t in self.h_commits.items():
+        for k,t in self.commits.items():
             if k in self.sizes:
                 if t not in time2num:
                     time2num[t] = 0

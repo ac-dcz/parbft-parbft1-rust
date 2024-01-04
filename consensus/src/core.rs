@@ -284,6 +284,10 @@ impl Core {
         self.par_value_wait.retain(|h, _| h > height);
     }
 
+    fn is_optimistic(&self) -> bool {
+        return !self.parameters.ddos && !self.parameters.random_ddos;
+    }
+
     async fn store_block(&mut self, block: &Block) {
         let key = block.digest().to_vec();
         let value = bincode::serialize(block).expect("Failed to serialize block");
@@ -385,7 +389,7 @@ impl Core {
                 self.broadcast_opt_propose(block).await?;
             }
 
-            if self.pes_path {
+            if self.pes_path && !self.is_optimistic() {
                 self.update_smvba_state(self.height, 1);
                 let round = self.smvba_current_round.get(&self.height).unwrap_or(&1);
                 let proof = SPBProof {
@@ -541,6 +545,18 @@ impl Core {
             self.terminate_smvba(self.height - 2).await?;
         }
 
+        if self.pes_path && self.is_optimistic() {
+            let round = self.smvba_current_round.get(&self.height).unwrap_or(&1);
+            let proof = SPBProof {
+                height: self.height,
+                phase: INIT_PHASE,
+                round: round.clone(),
+                shares: Vec::new(),
+            };
+            let block = self.generate_proposal(PES).await;
+            self.broadcast_pes_propose(block, proof).await?;
+        }
+
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
 
@@ -578,16 +594,33 @@ impl Core {
             debug!("Created hs {:?}", vote);
             //3. broadcast vote
             let message = ConsensusMessage::HSVote(vote.clone());
-            Synchronizer::transmit(
-                message,
-                &self.name,
-                None,
-                &self.network_filter,
-                &self.committee,
-                OPT,
-            )
-            .await?;
-            self.handle_opt_vote(&vote).await?;
+            if !self.is_optimistic() {
+                Synchronizer::transmit(
+                    message,
+                    &self.name,
+                    None,
+                    &self.network_filter,
+                    &self.committee,
+                    OPT,
+                )
+                .await?;
+                self.handle_opt_vote(&vote).await?;
+            } else {
+                let leader = self.leader_elector.get_leader(self.height + 1);
+                if leader != self.name {
+                    Synchronizer::transmit(
+                        message,
+                        &self.name,
+                        None,
+                        &self.network_filter,
+                        &self.committee,
+                        OPT,
+                    )
+                    .await?;
+                } else {
+                    self.handle_opt_vote(&vote).await?;
+                }
+            }
         }
         Ok(())
     }
@@ -1837,7 +1870,7 @@ impl Core {
                 .expect("Failed to send the OPT block");
         }
         //如果启动了悲观路劲
-        if self.pes_path {
+        if (self.pes_path && !self.is_optimistic()) || !self.opt_path {
             let round = self.smvba_current_round.get(&self.height).unwrap_or(&1);
             let proof = SPBProof {
                 height: self.height,

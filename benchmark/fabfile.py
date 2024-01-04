@@ -104,11 +104,11 @@ def remote(ctx):
     ''' Run benchmarks on AWS '''
     bench_params = {
         'nodes': [16],
-        'rate': [120_000],
+        'rate': [200_000,145_000,125_000,110_000],
         'tx_size': 16,
         'faults': 0, 
         'duration': 60,
-        'runs': 2,
+        'runs': 1,
     }
     node_params = {
         'consensus': {
@@ -128,7 +128,7 @@ def remote(ctx):
             'max_payload_size': 15_625,
             'min_block_delay': 100
         },
-        'protocol': 1, # 0 for 2-chain HotStuff, 1 for Ditto, 2 for 2-chain VABA
+        'protocol': 0, # 0 for 2-chain HotStuff, 1 for Ditto, 2 for 2-chain VABA
     }
     try:
         Bench(ctx).run(bench_params, node_params, debug=False)
@@ -164,6 +164,6 @@ def kill(ctx):
 def logs(ctx):
     ''' Print a summary of the logs '''
     try:
-        print(LogParser.process('./logs').result())
+        LogParser.process('./logs').print("./results/temp_result.txt","./results/temp_txs.txt")
     except ParseError as e:
         Print.error(BenchError('Failed to parse logs', e))
