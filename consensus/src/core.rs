@@ -611,7 +611,7 @@ impl Core {
                     Synchronizer::transmit(
                         message,
                         &self.name,
-                        None,
+                        Some(&leader),
                         &self.network_filter,
                         &self.committee,
                         OPT,
