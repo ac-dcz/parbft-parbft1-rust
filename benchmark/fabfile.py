@@ -46,9 +46,10 @@ def local(ctx):
 
 
 @task
-def create(ctx, nodes=4): # 创建机器实例  nodes表示在一台机器上跑多少个节点
+def create(ctx, nodes=[4,4,4,4]): # 创建机器实例  nodes表示在一台机器上跑多少个节点
     ''' Create a testbed'''
     try:
+        nodes=[4,4,4,4]
         InstanceManager.make().create_instances(nodes)
     except BenchError as e:
         Print.error(e)
@@ -164,6 +165,6 @@ def kill(ctx):
 def logs(ctx):
     ''' Print a summary of the logs '''
     try:
-        LogParser.process('./logs').print("./results/temp_result.txt","./results/temp_txs.txt")
+        LogParser.process('./logs').print("./results/temp_result.txt","./results/temp_txs.txt","./results/temp_latency.txt")
     except ParseError as e:
         Print.error(BenchError('Failed to parse logs', e))

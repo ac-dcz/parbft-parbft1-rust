@@ -95,15 +95,16 @@ class Bench:
 
     def _select_hosts(self, bench_parameters):
         nodes = max(bench_parameters.nodes)
-
+        
         # Ensure there are enough hosts.
         hosts = self.manager.hosts()
         if sum(len(x) for x in hosts.values()) < nodes:
             return []
-
+    
         # Select the hosts in different data centers.
-        ordered = zip(*hosts.values())
-        ordered = [x for y in ordered for x in y]
+        ordered = [x for y in hosts.values() for x in y]
+        # print(hosts,ordered)
+        # print(nodes,ordered[:nodes])
         return ordered[:nodes]
 
     def _background_run(self, host, command, log_file):
@@ -339,7 +340,8 @@ class Bench:
                         )
                         self._logs(hosts, faults, protocol, ddos).print(
                             PathMaker.result_file(n, r, bench_parameters.tx_size, faults),
-                            PathMaker.txs_file(n, r, bench_parameters.tx_size, faults)
+                            PathMaker.txs_file(n, r, bench_parameters.tx_size, faults),
+                            PathMaker.latency_file(n, r, bench_parameters.tx_size, faults)
                         )
                     except (subprocess.SubprocessError, GroupException, ParseError) as e:
                         self.kill(hosts=hosts)

@@ -155,7 +155,7 @@ class InstanceManager:
         return response['Images'][0]['ImageId']
 
     def create_instances(self, instances):
-        assert isinstance(instances, int) and instances > 0
+        assert isinstance(instances, list)
 
         # Create the security group in every region.
         for client in self.clients.values():
@@ -168,17 +168,19 @@ class InstanceManager:
 
         try:
             # Create all instances.
-            size = instances * len(self.clients)
+            # size = instances * len(self.clients)
+            size = sum(instances)
+            print(size , instances)
             progress = progress_bar(
                 self.clients.values(), prefix=f'Creating {size} instances'
             )
-            for client in progress:
+            for i,client in enumerate(progress):
                 client.run_instances(
                     ImageId=self._get_ami(client),
                     InstanceType=self.settings.instance_type,
                     KeyName=self.settings.key_name,
-                    MaxCount=instances,
-                    MinCount=instances,
+                    MaxCount=instances[i],
+                    MinCount=instances[i],
                     SecurityGroups=[self.SECURITY_GROUP_NAME],
                     TagSpecifications=[{
                         'ResourceType': 'instance',

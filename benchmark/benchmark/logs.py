@@ -40,14 +40,14 @@ class LogParser:
                 results = p.map(self._parse_nodes, nodes)
         except (ValueError, IndexError) as e:
             raise ParseError(f'Failed to parse node logs: {e}')
-        proposals, commits, sizes, self.received_samples, timeouts, self.configs,h_proposals,h_commits \
+        proposals, commits, sizes, self.received_samples, timeouts, self.configs,h_proposals,h_commits,d2t_samples \
             = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
         self.h_proposals = self._merge_results([x.items() for x in h_proposals])
         self.h_commits = self._merge_results([x.items() for x in h_commits])
         sizes = self._merge_results([x.items() for x in sizes])
-        
+        self.d2t_samples = self._merge_results([x.items() for x in d2t_samples])
         self.sizes = {
             k[:44]: sizes[k[:44]] for k,_ in self.h_commits.items() if k[:44] in sizes
         }
@@ -112,8 +112,9 @@ class LogParser:
         tmp = findall(r'Payload ([^ ]+) contains (\d+) B', log)
         sizes = {d: int(s) for d, s in tmp}
 
-        tmp = findall(r'Payload ([^ ]+) contains sample tx (\d+)', log)
-        samples = {int(s): d for d, s in tmp}
+        tmp = findall(r'\[(.*Z) .* Payload ([^ ]+) contains sample tx (\d+)', log)
+        samples = {int(s): d for _,d, s in tmp}
+        d2t_samples= {d:self._to_posix(t) for t,d,_ in tmp}
 
         tmp = findall(r'.* WARN .* Timeout', log)
         timeouts = len(tmp)
@@ -153,7 +154,7 @@ class LogParser:
             }
         }
 
-        return proposals, commits, sizes, samples, timeouts, configs,h_proposals,h_commits
+        return proposals, commits, sizes, samples, timeouts, configs,h_proposals,h_commits,d2t_samples
 
     def _to_posix(self, string):
         x = datetime.fromisoformat(string.replace('Z', '+00:00'))
@@ -242,6 +243,42 @@ class LogParser:
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
             '-----------------------------------------\n'
         )
+    def latencyWithTime(self):
+        t2d,c_times = {},[]#time to digest
+        for d,t in self.commits.items():
+            t2d.setdefault(t,[]).append(d)
+            c_times+=[t]
+
+        c_times.sort() # 按提交时间排序
+        latencyWTime = []
+
+        for t in c_times:
+            txs = t2d[t]
+            p_times = [] # 记录create时间
+            ct2d = {}
+            for d in txs:
+                pt = self.proposals[d]
+                ct2d.setdefault(pt,[]).append(d)
+                p_times.append(pt)
+            p_times.sort() # 内部按created 时间排序
+
+            for pt in p_times:
+                ptxs = ct2d[pt]
+                for d in ptxs:
+                    if d in self.d2t_samples:
+                        start = self.d2t_samples[d]
+                        end = self.commits[d]
+                        latencyWTime.append((d,end-start))
+        content ,seq= "",0
+        for d,t in latencyWTime:
+            num = self.sizes[d]/self.size[0]
+            content += f'{seq},{t},{num}\n'
+            seq+=1
+
+        return content+"\n"
+
+        
+
     def transactionsWithTime(self):
         times,t_times = [],[0]
         time2num = {}
@@ -251,8 +288,13 @@ class LogParser:
                     time2num[t] = 0
                     times.append(t)
                 time2num[t] += self.sizes[k]/self.size[0]
+
         times.sort()
-        start,key,temp = times[0],0.0 ,{}
+        start = min(self.proposals.values())    
+        times.insert(0,start)
+        time2num[start] = 0
+
+        key,temp = 0.0 ,{}
         for t in times:
             d = t-start
             if d<=0.002:
@@ -273,13 +315,16 @@ class LogParser:
         content += "\n"
         return content
 
-    def print(self, r_filename,t_filename):
+    def print(self, r_filename,t_filename,l_filename):
         assert isinstance(r_filename, str)
         assert isinstance(t_filename, str)
         with open(r_filename, 'a') as f:
             f.write(self.result())
         with open(t_filename, 'a') as f:
             f.write(self.transactionsWithTime())
+        with open(l_filename, 'a') as f:
+            f.write(self.latencyWithTime())
+
 
     @classmethod
     def process(cls, directory, faults=0, protocol=0, ddos=False):
