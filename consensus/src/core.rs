@@ -715,6 +715,7 @@ impl Core {
             self.name,
             block.clone(),
             proof,
+            self.epoch,
             path,
             self.signature_service.clone(),
         )
@@ -1129,6 +1130,7 @@ impl Core {
                         mvote.leader,
                         value,
                         fin_proof,
+                        self.epoch,
                         self.signature_service.clone(),
                     )
                     .await;
@@ -1203,6 +1205,7 @@ impl Core {
                     leader,
                     value.clone(),
                     proof.clone(),
+                    self.epoch,
                     self.signature_service.clone(),
                 )
                 .await;
@@ -1272,7 +1275,7 @@ impl Core {
     }
 
     async fn handle_smvba_halt(&mut self, halt: MHalt) -> ConsensusResult<()> {
-        debug!("Processing {:?}", halt);
+        debug!("Processing {:?},{}", halt, halt.epoch);
 
         ensure!(
             self.smvba_msg_filter(halt.epoch, halt.height, halt.round, FIN_PHASE),
@@ -1345,7 +1348,7 @@ impl Core {
     }
 
     async fn handle_par_prepare(&mut self, prepare: PrePare) -> ConsensusResult<()> {
-        debug!("Processing {:?}", prepare);
+        debug!("Processing {:?} {}", prepare, prepare.epoch);
 
         if prepare.epoch != self.epoch || prepare.height + 2 <= self.height {
             return Ok(());
@@ -1390,9 +1393,7 @@ impl Core {
         let pes_nums = pes_set.len() as Stake;
         let mut aba_val: Option<ABAVal> = None;
         if opt_nums + pes_nums == self.committee.quorum_threshold() {
-            if opt_nums == self.committee.quorum_threshold() {
-                // 啥事不干 已经保证了至少有f+1诚实节点已经收到了h-1高度的propose
-            } else if opt_nums > 0 {
+            if opt_nums > 0 {
                 aba_val = Some(
                     ABAVal::new(
                         self.name,
@@ -1450,16 +1451,16 @@ impl Core {
         &mut self,
         epoch: SeqNumber,
         height: SeqNumber,
-        round: SeqNumber,
+        _round: SeqNumber,
         phase: u8,
     ) -> bool {
         if epoch != self.epoch || height + 2 <= self.height || phase > MUX_PHASE {
             return false;
         }
-        let cur_round = self.aba_current_round.entry(height).or_insert(1);
-        if *cur_round > round {
-            return false;
-        }
+        // let cur_round = self.aba_current_round.entry(height).or_insert(1);
+        // if *cur_round > round {
+        //     return false;
+        // }
 
         if self.aba_output.entry(height).or_insert(None).is_some() {
             return false;

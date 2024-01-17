@@ -721,12 +721,13 @@ impl MHalt {
         leader: PublicKey,
         value: SPBValue,
         proof: SPBProof,
+        epoch: SeqNumber,
         mut signature_service: SignatureService,
     ) -> Self {
         let mut halt = Self {
             round: proof.round,
             height: proof.height,
-            epoch: value.block.epoch,
+            epoch,
             author,
             value,
             leader,
@@ -814,12 +815,13 @@ impl PrePare {
         author: PublicKey,
         block: Block,
         proof: PrePareProof,
+        epoch: SeqNumber,
         tag: u8,
         mut signature_service: SignatureService,
     ) -> Self {
         let mut prepare = Self {
             author,
-            epoch: block.epoch,
+            epoch,
             height: block.height,
             tag,
             block,
