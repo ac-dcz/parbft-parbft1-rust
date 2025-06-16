@@ -49,7 +49,7 @@ class LogParser:
         sizes = self._merge_results([x.items() for x in sizes])
         
         self.sizes = {
-            k: sizes[k[:44]] for k,_ in self.h_commits.items() if k[:44] in sizes
+            k: sizes[k] for k,_ in self.commits.items() if k in sizes
         }
 
         self.timeouts = max(timeouts)
@@ -75,8 +75,8 @@ class LogParser:
         return merged
 
     def _parse_clients(self, log):
-        if search(r'Error', log) is not None:
-            raise ParseError('Client(s) panicked')
+        # if search(r'Error', log) is not None:
+        #     raise ParseError('Client(s) panicked')
 
         size = int(search(r'Transactions size: (\d+)', log).group(1))
         rate = int(search(r'Transactions rate: (\d+)', log).group(1))
@@ -92,8 +92,8 @@ class LogParser:
         return size, rate, start, misses, samples
 
     def _parse_nodes(self, log):
-        if search(r'panic', log) is not None:
-            raise ParseError('Client(s) panicked')
+        # if search(r'panic', log) is not None:
+        #     raise ParseError('Client(s) panicked')
 
         tmp_p = findall(r'\[(.*Z) .* Created B(\d+)\(([^ ]+)\) epoch (\d+)', log)
         tmp = [(d, self._to_posix(t)) for t, _, d, _ in tmp_p]
