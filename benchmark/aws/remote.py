@@ -109,8 +109,12 @@ class Bench:
     def _background_run(self, host, command, log_file):
         name = splitext(basename(log_file))[0]
         cmd = f'tmux new -d -s "{name}" "{command} |& tee {log_file}"'
+        # 启动监控进程(每5秒记录一次)
+        monitor_cmd = f'tmux new -d -s "{name}_monitor" "pidstat -p `pgrep -f \\"{command}\\"` -u -r 5 > {log_file}.monitor.log"'
         c = Connection(host, user='ubuntu', connect_kwargs=self.connect)
         output = c.run(cmd, hide=True)
+        sleep(1)  # 等待主进程启动
+        c.run(monitor_cmd, hide=True)
         self._check_stderr(output)
 
     def _update(self, hosts):

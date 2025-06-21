@@ -26,6 +26,9 @@ class LocalBench:
         name = splitext(basename(log_file))[0]
         cmd = f'{command} 2> {log_file}'
         subprocess.run(['tmux', 'new', '-d', '-s', name, cmd], check=True)
+        sleep(1)
+        monitor_cmd = f'pidstat -p `pgrep -f \\"{command}\\"` -u -r 5 > {log_file}.monitor.log"'
+        subprocess.run(['tmux','new','-d','-s',f"{name}_monitor", monitor_cmd], check=True)
 
     def _kill_nodes(self):
         try:
